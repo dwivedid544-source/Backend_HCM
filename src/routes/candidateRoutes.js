@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middlewares/authMiddleware');
+const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
   getAvailableJobs,
@@ -23,16 +24,16 @@ router.get('/jobs', getAvailableJobs);
 
 // Protected - Only CANDIDATE
 router.use(protect, authorize('CANDIDATE'));
-router.post('/jobs/:jobId/apply', applyToJob);
-router.get('/applications', getMyApplications);
-router.delete('/applications/:appId', withdrawApplication);
-router.get('/profile', getCandidateProfile);
-router.put('/profile', updateCandidateProfile);
-router.get('/settings', getSettings);
-router.put('/settings', updateSettings);
+router.post('/jobs/:jobId/apply', checkPermission('browse_jobs', 'create'), applyToJob);
+router.get('/applications', checkPermission('my_applications', 'view'), getMyApplications);
+router.delete('/applications/:appId', checkPermission('my_applications', 'delete'), withdrawApplication);
+router.get('/profile', checkPermission('profile', 'view'), getCandidateProfile);
+router.put('/profile', checkPermission('profile', 'edit'), updateCandidateProfile);
+router.get('/settings', checkPermission('settings', 'view'), getSettings);
+router.put('/settings', checkPermission('settings', 'edit'), updateSettings);
 
-// Offer automation
-router.get('/offers', getMyOffers);
-router.patch('/offers/:id/respond', respondToOffer);
+// Offer response
+router.get('/offers', checkPermission('offers', 'view'), getMyOffers);
+router.patch('/offers/:id/respond', checkPermission('offers', 'approve'), respondToOffer);
 
 module.exports = router;

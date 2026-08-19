@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middlewares/authMiddleware');
+const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
   getTeam, addTeamMember,
@@ -19,40 +20,50 @@ const {
   requestSalaryIncrement
 } = require('../controllers/managerController');
 
-// Only MANAGER (and ADMIN) can access these routes
+// Base authentication & platform role check
 router.use(protect, authorize('MANAGER', 'ADMIN', 'SUPERADMIN'));
 
-router.get('/team', getTeam);
-router.post('/team', addTeamMember);
-router.get('/org-employees', getOrgEmployees);
-router.get('/attendance', getTeamAttendance);
-router.post('/attendance', addManualAttendance);
+// Team Members
+router.get('/team', checkPermission('team_members', 'view'), getTeam);
+router.post('/team', checkPermission('team_members', 'create'), addTeamMember);
+router.get('/org-employees', checkPermission('team_members', 'view'), getOrgEmployees);
 
-router.get('/leaves', getTeamLeaves);
-router.post('/leaves', addTeamLeaveRequest);
-router.patch('/leaves/:id', reviewLeave);
+// Attendance Review
+router.get('/attendance', checkPermission('attendance_review', 'view'), getTeamAttendance);
+router.post('/attendance', checkPermission('attendance_review', 'create'), addManualAttendance);
 
-router.get('/tasks', getTeamTasks);
-router.post('/tasks', assignTask);
-router.patch('/tasks/:id', updateTask);
+// Leave Approval
+router.get('/leaves', checkPermission('leave_approval', 'view'), getTeamLeaves);
+router.post('/leaves', checkPermission('leave_approval', 'create'), addTeamLeaveRequest);
+router.patch('/leaves/:id', checkPermission('leave_approval', 'approve'), reviewLeave);
 
-router.get('/performance', getTeamPerformance);
-router.post('/performance', addPerformanceGoal);
+// Tasks
+router.get('/tasks', checkPermission('tasks', 'view'), getTeamTasks);
+router.post('/tasks', checkPermission('tasks', 'create'), assignTask);
+router.patch('/tasks/:id', checkPermission('tasks', 'edit'), updateTask);
 
-router.get('/reviews', getTeamReviews);
-router.post('/reviews', createTeamReview);
-router.patch('/reviews/:id', updateTeamReview);
+// KPI Tracking & Performance
+router.get('/performance', checkPermission('kpi_tracking', 'view'), getTeamPerformance);
+router.post('/performance', checkPermission('kpi_tracking', 'create'), addPerformanceGoal);
 
-router.post('/increments', requestSalaryIncrement);
-router.get('/increments', getIncrementRequests);
-router.patch('/increments/:id/approve', approveIncrementRequest);
-router.patch('/increments/:id/reject', rejectIncrementRequest);
+// Reviews
+router.get('/reviews', checkPermission('reviews', 'view'), getTeamReviews);
+router.post('/reviews', checkPermission('reviews', 'create'), createTeamReview);
+router.patch('/reviews/:id', checkPermission('reviews', 'edit'), updateTeamReview);
 
-router.get('/resignations', getResignations);
-router.patch('/resignations/:id', reviewResignation);
+// Salary Increments
+router.post('/increments', checkPermission('reviews', 'create'), requestSalaryIncrement);
+router.get('/increments', checkPermission('reviews', 'view'), getIncrementRequests);
+router.patch('/increments/:id/approve', checkPermission('reviews', 'approve'), approveIncrementRequest);
+router.patch('/increments/:id/reject', checkPermission('reviews', 'approve'), rejectIncrementRequest);
 
-router.get('/reimbursements', getManagerReimbursements);
-router.patch('/reimbursements/:id/review', reviewManagerReimbursement);
+// Team Resignations
+router.get('/resignations', checkPermission('team_resignations', 'view'), getResignations);
+router.patch('/resignations/:id', checkPermission('team_resignations', 'approve'), reviewResignation);
+
+// Reimbursements
+router.get('/reimbursements', checkPermission('reimbursements', 'view'), getManagerReimbursements);
+router.patch('/reimbursements/:id/review', checkPermission('reimbursements', 'approve'), reviewManagerReimbursement);
 
 // AI Features
 const {
@@ -61,8 +72,8 @@ const {
   aiPerformanceSummaries
 } = require('../controllers/aiController');
 
-router.get('/ai/attendance-insights', aiAttendanceInsights);
-router.post('/ai/leave-recommendations', aiLeaveRecommendations);
-router.post('/ai/performance-summaries', aiPerformanceSummaries);
+router.get('/ai/attendance-insights', checkPermission('attendance_review', 'view'), aiAttendanceInsights);
+router.post('/ai/leave-recommendations', checkPermission('leave_approval', 'view'), aiLeaveRecommendations);
+router.post('/ai/performance-summaries', checkPermission('reviews', 'view'), aiPerformanceSummaries);
 
 module.exports = router;

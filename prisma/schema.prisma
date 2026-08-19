@@ -253,7 +253,7 @@ model EmployeeProfile {
   department   Department? @relation(fields: [departmentId], references: [id])
 
   managerId String?
-  manager   EmployeeProfile?  @relation("ManagerReports", fields: [managerId], references: [id])
+  manager   EmployeeProfile?  @relation("ManagerReports", fields: [managerId], references: [id], onDelete: SetNull)
   reports   EmployeeProfile[] @relation("ManagerReports")
 
   payslips                Payslip[]
@@ -392,7 +392,7 @@ model Interview {
   application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
   interviewerId String
-  interviewer   EmployeeProfile @relation(fields: [interviewerId], references: [id])
+  interviewer   EmployeeProfile @relation(fields: [interviewerId], references: [id], onDelete: Cascade)
 
   dateTime    DateTime
   meetingLink String?
@@ -649,7 +649,7 @@ model TicketMessage {
   ticket   SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   senderId String
-  sender   User   @relation(fields: [senderId], references: [id])
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
 
   text          String   @db.Text
   attachmentUrl String?  @db.Text
@@ -740,9 +740,9 @@ model CustomRole {
   permissionVersion Int        @default(1)
 
   createdById String?
-  createdBy   User?   @relation("RoleCreator", fields: [createdById], references: [id])
+  createdBy   User?   @relation("RoleCreator", fields: [createdById], references: [id], onDelete: SetNull)
   updatedById String?
-  updatedBy   User?   @relation("RoleUpdater", fields: [updatedById], references: [id])
+  updatedBy   User?   @relation("RoleUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

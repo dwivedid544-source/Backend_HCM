@@ -3,7 +3,8 @@
 // ============================================================
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../middlewares/authMiddleware');
+const { protect } = require('../middlewares/authMiddleware');
+const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
   getProfile, updateProfile,
@@ -22,56 +23,67 @@ const {
   getCompensationProfile, requestIncrement, getPayrollSnapshots
 } = require('../controllers/compensationController');
 
-// All routes need login + EMPLOYEE role (also MANAGER, HR can access their own data)
+// All routes require authentication
 router.use(protect);
 
-router.get('/profile', getProfile);
-router.put('/profile', updateProfile);
+// Profile
+router.get('/profile', checkPermission('profile', 'view'), getProfile);
+router.put('/profile', checkPermission('profile', 'edit'), updateProfile);
 
-router.post('/attendance/clock-in', clockIn);
-router.post('/attendance/clock-out', clockOut);
-router.get('/attendance', getAttendance);
+// Attendance
+router.post('/attendance/clock-in', checkPermission('attendance', 'create'), clockIn);
+router.post('/attendance/clock-out', checkPermission('attendance', 'create'), clockOut);
+router.get('/attendance', checkPermission('attendance', 'view'), getAttendance);
 
-router.post('/resignation', submitResignation);
-router.get('/resignation', getResignation);
+// Resignation
+router.post('/resignation', checkPermission('resignation', 'create'), submitResignation);
+router.get('/resignation', checkPermission('resignation', 'view'), getResignation);
 
-router.get('/leaves', getLeaves);
-router.post('/leaves', applyLeave);
-router.delete('/leaves/:id', cancelLeave);
+// Leaves
+router.get('/leaves', checkPermission('leave', 'view'), getLeaves);
+router.post('/leaves', checkPermission('leave', 'create'), applyLeave);
+router.delete('/leaves/:id', checkPermission('leave', 'delete'), cancelLeave);
 
-router.get('/payslips', getPayslips);
-
-// Enterprise Compensation & Payroll
-router.get('/compensation', (req, res, next) => {
+// Payroll & Payslips
+router.get('/payslips', checkPermission('payroll', 'view'), getPayslips);
+router.get('/compensation', checkPermission('payroll', 'view'), (req, res, next) => {
   req.params.employeeId = req.user.employeeProfileId;
   getCompensationProfile(req, res, next);
 });
-router.post('/compensation/increment', requestIncrement);
-router.get('/payroll/snapshots', getPayrollSnapshots);
-router.get('/performance', getPerformance);
-router.post('/performance/goals/:id/progress', updateGoalProgress);
-router.post('/performance/skills', upsertSkill);
-router.delete('/performance/skills/:id', deleteSkill);
-router.get('/benefits', getBenefits);
-router.post('/benefits/claims', submitBenefitClaim);
-router.post('/benefits/enroll', enrollBenefitPlan);
-router.post('/benefits/unenroll', unenrollBenefitPlan);
-router.get('/tasks', getTasks);
+router.post('/compensation/increment', checkPermission('payroll', 'create'), requestIncrement);
+router.get('/payroll/snapshots', checkPermission('payroll', 'view'), getPayrollSnapshots);
 
-router.get('/tickets', getTickets);
-router.post('/tickets', createTicket);
-router.post('/tickets/:id/reply', replyTicket);
-router.delete('/tickets/:id/messages/:msgId', deleteTicketMessage);
+// Performance
+router.get('/performance', checkPermission('performance', 'view'), getPerformance);
+router.post('/performance/goals/:id/progress', checkPermission('performance', 'create'), updateGoalProgress);
+router.post('/performance/skills', checkPermission('performance', 'create'), upsertSkill);
+router.delete('/performance/skills/:id', checkPermission('performance', 'delete'), deleteSkill);
 
-router.get('/holidays', getHolidays);
-router.get('/announcements', getAnnouncements);
+// Benefits
+router.get('/benefits', checkPermission('benefits', 'view'), getBenefits);
+router.post('/benefits/claims', checkPermission('benefits', 'create'), submitBenefitClaim);
+router.post('/benefits/enroll', checkPermission('benefits', 'create'), enrollBenefitPlan);
+router.post('/benefits/unenroll', checkPermission('benefits', 'create'), unenrollBenefitPlan);
+router.get('/tasks', checkPermission('dashboard', 'view'), getTasks);
 
-router.get('/documents', getDocuments);
-router.post('/documents', uploadDocument);
-router.delete('/documents/:id', deleteDocument);
+// Support Help Desk
+router.get('/tickets', checkPermission('help_desk', 'view'), getTickets);
+router.post('/tickets', checkPermission('help_desk', 'create'), createTicket);
+router.post('/tickets/:id/reply', checkPermission('help_desk', 'create'), replyTicket);
+router.delete('/tickets/:id/messages/:msgId', checkPermission('help_desk', 'delete'), deleteTicketMessage);
 
-router.get('/policies', getPolicies);
-router.post('/policies/:id/acknowledge', acknowledgePolicy);
+// Holidays & Announcements
+router.get('/holidays', checkPermission('dashboard', 'view'), getHolidays);
+router.get('/announcements', checkPermission('dashboard', 'view'), getAnnouncements);
+
+// Documents
+router.get('/documents', checkPermission('documents', 'view'), getDocuments);
+router.post('/documents', checkPermission('documents', 'create'), uploadDocument);
+router.delete('/documents/:id', checkPermission('documents', 'delete'), deleteDocument);
+
+// Compliance Policies
+router.get('/policies', checkPermission('compliance', 'view'), getPolicies);
+router.post('/policies/:id/acknowledge', checkPermission('compliance', 'create'), acknowledgePolicy);
 
 // AI Features
 const {

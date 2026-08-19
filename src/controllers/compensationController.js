@@ -7,11 +7,28 @@ const { generatePayrollSnapshot } = require('../services/payrollEngineService');
 // ==========================================
 exports.getCompensationProfile = async (req, res) => {
   try {
-    const { employeeId } = req.params;
-    const profile = await prisma.compensationProfile.findUnique({
+    let { employeeId } = req.params;
+    if (!employeeId && req.user?.userId) {
+      const emp = await prisma.employeeProfile.findUnique({ where: { userId: req.user.userId } });
+      employeeId = emp?.id;
+    }
+    if (!employeeId) return res.json(null);
+
+    let profile = await prisma.compensationProfile.findUnique({
       where: { employeeId },
       include: { salaryBand: true, salaryStructure: true, employee: true }
     });
+
+    if (!profile) {
+      const emp = await prisma.employeeProfile.findUnique({ where: { userId: employeeId } });
+      if (emp) {
+        profile = await prisma.compensationProfile.findUnique({
+          where: { employeeId: emp.id },
+          include: { salaryBand: true, salaryStructure: true, employee: true }
+        });
+      }
+    }
+
     if (!profile) return res.json(null);
     res.json(profile);
   } catch (error) {
@@ -143,49 +160,62 @@ exports.requestIncrement = async (req, res) => {
 // ==========================================
 exports.runPayroll = async (req, res) => {
   try {
-    const { employeeId, month } = req.body;
-    const snapshot = await generatePayrollSnapshot(employeeId, month, req.user.organizationId);
-    res.status(201).json(snapshot);
+    const { employeeId, month, status = 'Paid' } = req.body;
+    let empId = employeeId;
+    const user = await prisma.user.findUnique({ where: { id: employeeId }, include: { employeeProfile: true } });
+    if (user?.employeeProfile) {
+      empId = user.employeeProfile.id;
+    }
+    const targetMonth = month || new Date().toLocaleString('default', { month: 'long' });
+    const snapshot = await generatePayrollSnapshot(empId, targetMonth, req.user?.organizationId, status);
+    res.status(201).json({ success: true, data: snapshot });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
 exports.runPayrollBatch = async (req, res) => {
   try {
-    const { employeeIds, month } = req.body;
+    const { employeeIds, month, status = 'Paid' } = req.body;
     if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
-      return res.status(400).json({ message: "employeeIds array is required" });
+      return res.status(400).json({ success: false, message: "employeeIds array is required" });
     }
     
     const snapshots = [];
     const errors = [];
-    
-    // Process concurrently (we could use Promise.allSettled)
-    const results = await Promise.allSettled(
-      employeeIds.map(id => generatePayrollSnapshot(id, month, req.user.organizationId))
-    );
-    
-    results.forEach((result, idx) => {
-      if (result.status === 'fulfilled') {
-        snapshots.push(result.value);
-      } else {
-        errors.push({ employeeId: employeeIds[idx], error: result.reason.message });
-      }
-    });
+    const targetMonth = month || new Date().toLocaleString('default', { month: 'long' });
 
-    res.status(201).json({ snapshots, errors });
+    for (const rawId of employeeIds) {
+      try {
+        let empId = rawId;
+        const user = await prisma.user.findUnique({ where: { id: rawId }, include: { employeeProfile: true } });
+        if (user?.employeeProfile) {
+          empId = user.employeeProfile.id;
+        }
+        const snap = await generatePayrollSnapshot(empId, targetMonth, req.user?.organizationId, status);
+        snapshots.push(snap);
+      } catch (err) {
+        errors.push({ employeeId: rawId, error: err.message });
+      }
+    }
+
+    res.status(201).json({ success: true, snapshots, errors });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 };
 
 exports.getPayrollSnapshots = async (req, res) => {
   try {
-    // If employee, only their own. If HR/Admin, all for org.
-    const whereClause = req.user.role === 'EMPLOYEE'
-      ? { employee: { userId: req.user.userId } }
-      : { employee: { user: { organizationId: req.user.organizationId } } };
+    let whereClause = {};
+
+    if (req.user?.role === 'EMPLOYEE') {
+      whereClause = { employee: { userId: req.user.userId } };
+    } else if (req.user?.role === 'SUPERADMIN') {
+      whereClause = req.query.organizationId ? { employee: { user: { organizationId: req.query.organizationId } } } : {};
+    } else if (req.user?.organizationId) {
+      whereClause = { employee: { user: { organizationId: req.user.organizationId } } };
+    }
 
     if (req.query.month) whereClause.month = req.query.month;
 
@@ -197,7 +227,8 @@ exports.getPayrollSnapshots = async (req, res) => {
           select: { 
             fullName: true, 
             employeeId: true,
-            avatarUrl: true
+            avatarUrl: true,
+            user: { select: { id: true, role: true, organizationId: true } }
           } 
         } 
       },

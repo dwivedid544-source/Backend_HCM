@@ -74,16 +74,37 @@ const protect = async (req, res, next) => {
 // Usage: authorize('ADMIN', 'HR')  → sirf ADMIN aur HR access kar sakte hain
 const authorize = (...allowedRoles) => {
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({
+    if (!req.user) {
+      return res.status(401).json({
         success: false,
-        error: {
-          code: 'FORBIDDEN',
-          message: `Access denied. Required role: ${allowedRoles.join(' or ')}.`,
-        },
+        error: { code: 'UNAUTHORIZED', message: 'Not authenticated' }
       });
     }
-    next();
+
+    const currentRole = (req.user.role || '').toUpperCase();
+    const upperAllowed = allowedRoles.map(r => r.toUpperCase());
+
+    // SUPERADMIN always has platform-wide clearance
+    if (currentRole === 'SUPERADMIN') {
+      return next();
+    }
+
+    // ADMIN has administrative clearance across org modules
+    if (currentRole === 'ADMIN' && (upperAllowed.includes('ADMIN') || upperAllowed.includes('HR') || upperAllowed.includes('MANAGER') || upperAllowed.includes('EMPLOYEE'))) {
+      return next();
+    }
+
+    if (upperAllowed.includes(currentRole)) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      error: {
+        code: 'FORBIDDEN',
+        message: `Access denied. Required role: ${allowedRoles.join(' or ')}. Current role: ${req.user.role}`,
+      },
+    });
   };
 };
 

@@ -8,7 +8,7 @@ const prisma = require('../config/prisma');
 const DEFAULT_ROLES = [
   {
     name: 'Super Admin',
-    description: 'Ultimate system access',
+    description: 'Ultimate system access with global clearance',
     isCustom: false,
     inheritsFrom: 'SUPERADMIN',
     permissions: {
@@ -24,6 +24,11 @@ const DEFAULT_ROLES = [
       compliance: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       integrations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       billing: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      shift_management: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      overtime_rules: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      resignations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      reimbursements: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      approval_workflows: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       audit_logs: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       reports: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       settings: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
@@ -31,7 +36,7 @@ const DEFAULT_ROLES = [
   },
   {
     name: 'Admin',
-    description: 'Full system access',
+    description: 'Full organization management access',
     isCustom: false,
     inheritsFrom: 'ADMIN',
     permissions: {
@@ -41,12 +46,20 @@ const DEFAULT_ROLES = [
       users: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       roles_permissions: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       payroll_center: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      payroll_operations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       holidays: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       benefits_config: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       ai_center: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       compliance: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       integrations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       billing: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      shift_management: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      shifts: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      overtime_rules: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      overtime_policies: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      resignations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      reimbursements: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      approval_workflows: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       audit_logs: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       reports: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       settings: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
@@ -54,7 +67,7 @@ const DEFAULT_ROLES = [
   },
   {
     name: 'HR Manager',
-    description: 'People management access',
+    description: 'Recruitment, onboarding, and people operations clearance',
     isCustom: false,
     inheritsFrom: 'HR',
     permissions: {
@@ -65,14 +78,16 @@ const DEFAULT_ROLES = [
       hiring_pipeline: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       offer_management: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       onboarding: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      offboarding_resignations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       payroll_operations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      approvals: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       reports: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       messages: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
     }
   },
   {
     name: 'Manager',
-    description: 'Team management access',
+    description: 'Team leadership, attendance, approvals, and reviews',
     isCustom: false,
     inheritsFrom: 'MANAGER',
     permissions: {
@@ -83,12 +98,14 @@ const DEFAULT_ROLES = [
       kpi_tracking: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       tasks: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       reviews: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      team_resignations: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
+      reimbursements: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
       reports: ['view', 'create', 'edit', 'delete', 'approve', 'manage'],
     }
   },
   {
     name: 'Employee',
-    description: 'Standard user access',
+    description: 'Standard employee self-service workspace',
     isCustom: false,
     inheritsFrom: 'EMPLOYEE',
     permissions: {
@@ -97,15 +114,17 @@ const DEFAULT_ROLES = [
       attendance: ['view', 'create'],
       leave: ['view', 'create'],
       payroll: ['view'],
-      benefits: ['view'],
+      benefits: ['view', 'create'],
       documents: ['view', 'create'],
       performance: ['view'],
       help_desk: ['view', 'create'],
+      compliance: ['view'],
+      resignation: ['view', 'create'],
     }
   },
   {
     name: 'Candidate',
-    description: 'Limited portal access',
+    description: 'Candidate portal for applications and job offers',
     isCustom: false,
     inheritsFrom: 'CANDIDATE',
     permissions: {
@@ -113,9 +132,12 @@ const DEFAULT_ROLES = [
       browse_jobs: ['view'],
       my_applications: ['view', 'create'],
       resume_builder: ['view', 'create', 'edit'],
-      ai_resume_score: ['view', 'create'],
+      ai_score: ['view', 'create'],
       interview_schedule: ['view'],
       notifications: ['view'],
+      messages: ['view', 'create'],
+      offers: ['view', 'approve'],
+      settings: ['view', 'edit'],
     }
   }
 ];

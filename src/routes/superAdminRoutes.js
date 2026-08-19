@@ -12,7 +12,7 @@ const {
   getPlatformStats,
   getAllOrganizations, createOrganization, deleteOrganization,
   getAllPlatformUsers, createAdminForOrg,
-  toggleAnyUserActive, changeAnyUserRole,
+  toggleAnyUserActive, changeAnyUserRole, revokeAnyUserRole,
   getPlatformAuditLogs,
   getSystemHealth,
   getAnalytics,
@@ -50,6 +50,7 @@ router.post('/users', createUser);             // POST /api/superadmin/users
 router.put('/users/:id', updateUser);             // PUT  /api/superadmin/users/:id
 router.delete('/users/:id', deleteUser);             // DEL  /api/superadmin/users/:id
 router.patch('/users/:id/role', changeAnyUserRole);      // PATCH /api/superadmin/users/:id/role
+router.post('/users/:id/revoke-role', revokeAnyUserRole); // POST /api/superadmin/users/:id/revoke-role
 router.patch('/users/:id/toggle-active', toggleAnyUserActive);   // PATCH /api/superadmin/users/:id/toggle-active
 router.post('/users/:id/reset-password', resetUserPassword);   // POST /api/superadmin/users/:id/reset-password
 

@@ -19,6 +19,7 @@ const getOrCreateProfile = async (userId) => {
     manager: { select: { fullName: true, employeeId: true } },
     user: { select: { email: true, role: true } },
     shift: true,
+    compensationProfile: true,
   };
   let profile = await prisma.employeeProfile.findUnique({
     where: { userId },

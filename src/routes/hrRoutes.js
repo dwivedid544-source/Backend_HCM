@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middlewares/authMiddleware');
+const { checkPermission } = require('../middlewares/permissionMiddleware');
 const upload = require('../middlewares/upload');
 const fileUpload = require('../middlewares/fileUpload');
 
@@ -30,83 +31,82 @@ const {
   finalizePayrollSnapshot, getHRIncrementRequests, approveHRIncrementRequest, rejectHRIncrementRequest
 } = require('../controllers/compensationController');
 
-// Only HR, ADMIN, SUPERADMIN
+// Base authentication & platform role check
 router.use(protect, authorize('HR', 'ADMIN', 'SUPERADMIN'));
 
-// Jobs
-router.get('/jobs', getJobs);
-router.post('/jobs', createJob);
-router.put('/jobs/:id', updateJob);
-router.delete('/jobs/:id', deleteJob);
+// Job Posts
+router.get('/jobs', checkPermission('job_posts', 'view'), getJobs);
+router.post('/jobs', checkPermission('job_posts', 'create'), createJob);
+router.put('/jobs/:id', checkPermission('job_posts', 'edit'), updateJob);
+router.delete('/jobs/:id', checkPermission('job_posts', 'delete'), deleteJob);
 
-// Compensation & Payroll
-router.get('/compensation/:employeeId', getCompensationProfile);
-router.put('/compensation/:employeeId', updateCompensationProfile);
-router.post('/payroll/run', runPayroll);
-router.post('/payroll/run-batch', runPayrollBatch);
-router.get('/payroll/snapshots', getPayrollSnapshots);
-router.patch('/payroll/:id/finalize', finalizePayrollSnapshot);
+// Compensation & Payroll Operations
+router.get('/compensation/:employeeId', checkPermission('payroll_operations', 'view'), getCompensationProfile);
+router.put('/compensation/:employeeId', checkPermission('payroll_operations', 'edit'), updateCompensationProfile);
+router.post('/payroll/run', checkPermission('payroll_operations', 'create'), runPayroll);
+router.post('/payroll/run-batch', checkPermission('payroll_operations', 'create'), runPayrollBatch);
+router.get('/payroll/snapshots', checkPermission('payroll_operations', 'view'), getPayrollSnapshots);
+router.patch('/payroll/:id/finalize', checkPermission('payroll_operations', 'approve'), finalizePayrollSnapshot);
 
 // HR Salary Increments
-router.get('/payroll/increments', getHRIncrementRequests);
-router.patch('/payroll/increments/:id/approve', approveHRIncrementRequest);
-router.patch('/payroll/increments/:id/reject', rejectHRIncrementRequest);
+router.get('/payroll/increments', checkPermission('payroll_operations', 'view'), getHRIncrementRequests);
+router.patch('/payroll/increments/:id/approve', checkPermission('payroll_operations', 'approve'), approveHRIncrementRequest);
+router.patch('/payroll/increments/:id/reject', checkPermission('payroll_operations', 'approve'), rejectHRIncrementRequest);
 
-// Applications
-router.get('/applications', getApplications);
-router.post('/applications', createApplication);
-router.patch('/applications/:id/status', updateApplicationStatus);
-router.patch('/applications/:id/track', trackCandidateProfile);
-router.delete('/applications/:id', deleteApplication);
+// Candidates / Applications
+router.get('/applications', checkPermission('candidates', 'view'), getApplications);
+router.post('/applications', checkPermission('candidates', 'create'), createApplication);
+router.patch('/applications/:id/status', checkPermission('candidates', 'edit'), updateApplicationStatus);
+router.patch('/applications/:id/track', checkPermission('candidates', 'edit'), trackCandidateProfile);
+router.delete('/applications/:id', checkPermission('candidates', 'delete'), deleteApplication);
 
 // Offers
-router.get('/offers', getOffers);
-router.post('/offers', createOffer);
-router.put('/offers/:id', updateOffer);
-router.delete('/offers/:id', deleteOffer);
+router.get('/offers', checkPermission('offer_management', 'view'), getOffers);
+router.post('/offers', checkPermission('offer_management', 'create'), createOffer);
+router.put('/offers/:id', checkPermission('offer_management', 'edit'), updateOffer);
+router.delete('/offers/:id', checkPermission('offer_management', 'delete'), deleteOffer);
 
 // Interviews
-router.get('/interviews', getInterviews);
-router.post('/interviews', scheduleInterview);
-router.put('/interviews/:id', updateInterview);
-router.delete('/interviews/:id', deleteInterviewById);
-router.patch('/interviews/:id/status', updateInterviewStatus);
-router.patch('/interviews/:id/feedback', submitInterviewFeedback);
+router.get('/interviews', checkPermission('interviews', 'view'), getInterviews);
+router.post('/interviews', checkPermission('interviews', 'create'), scheduleInterview);
+router.put('/interviews/:id', checkPermission('interviews', 'edit'), updateInterview);
+router.delete('/interviews/:id', checkPermission('interviews', 'delete'), deleteInterviewById);
+router.patch('/interviews/:id/status', checkPermission('interviews', 'edit'), updateInterviewStatus);
+router.patch('/interviews/:id/feedback', checkPermission('interviews', 'edit'), submitInterviewFeedback);
 
 // Employees
-router.get('/employees', getAllEmployees);
-router.post('/employees', onboardEmployee);
-router.patch('/employees/:id/deactivate', deactivateEmployee);
-router.patch('/employees/:id/confirm-probation', confirmEmployeeProbation);
-router.patch('/employees/:id/extend-probation', extendEmployeeProbation);
+router.get('/employees', checkPermission('onboarding', 'view'), getAllEmployees);
+router.post('/employees', checkPermission('onboarding', 'create'), onboardEmployee);
+router.patch('/employees/:id/deactivate', checkPermission('onboarding', 'edit'), deactivateEmployee);
+router.patch('/employees/:id/confirm-probation', checkPermission('onboarding', 'approve'), confirmEmployeeProbation);
+router.patch('/employees/:id/extend-probation', checkPermission('onboarding', 'edit'), extendEmployeeProbation);
 
 // Exits / Offboarding
-router.post('/terminate', initiateTermination);
-router.get('/exits', getExitsList);
-router.patch('/exits/:id/clearance', updateClearanceStatus);
-router.patch('/exits/:id/finalize', finalizeExit);
-router.patch('/resignations/:id/approve', reviewResignationHr);
+router.post('/terminate', checkPermission('offboarding_resignations', 'create'), initiateTermination);
+router.get('/exits', checkPermission('offboarding_resignations', 'view'), getExitsList);
+router.patch('/exits/:id/clearance', checkPermission('offboarding_resignations', 'edit'), updateClearanceStatus);
+router.patch('/exits/:id/finalize', checkPermission('offboarding_resignations', 'approve'), finalizeExit);
+router.patch('/resignations/:id/approve', checkPermission('offboarding_resignations', 'approve'), reviewResignationHr);
 
 // Leaves
-router.get('/leaves', getAllLeaves);
+router.get('/leaves', checkPermission('dashboard', 'view'), getAllLeaves);
 
 // Support Tickets
-router.get('/tickets', getAllTickets);
-router.post('/tickets', createTicket);
-router.post('/tickets/:id/reply', fileUpload.single('file'), replyTicket);
-router.patch('/tickets/:id/status', updateTicketStatus);
+router.get('/tickets', checkPermission('dashboard', 'view'), getAllTickets);
+router.post('/tickets', checkPermission('dashboard', 'create'), createTicket);
+router.post('/tickets/:id/reply', checkPermission('dashboard', 'create'), fileUpload.single('file'), replyTicket);
+router.patch('/tickets/:id/status', checkPermission('dashboard', 'edit'), updateTicketStatus);
 
 // Onboarding
-router.get('/onboarding', getOnboardingTasks);
-router.post('/onboarding', createOnboardingTask);
-router.put('/onboarding/:id', updateOnboardingTask);
-router.delete('/onboarding/:id', deleteOnboardingTask);
-router.post('/onboarding/:id/remind-manager', remindManager);
-router.post('/onboarding/send-welcome', sendWelcomeEmailAll);
-router.post('/onboarding/:id/promote', promoteCandidate);
+router.get('/onboarding', checkPermission('onboarding', 'view'), getOnboardingTasks);
+router.post('/onboarding', checkPermission('onboarding', 'create'), createOnboardingTask);
+router.put('/onboarding/:id', checkPermission('onboarding', 'edit'), updateOnboardingTask);
+router.delete('/onboarding/:id', checkPermission('onboarding', 'delete'), deleteOnboardingTask);
+router.post('/onboarding/:id/remind-manager', checkPermission('onboarding', 'edit'), remindManager);
+router.post('/onboarding/send-welcome', checkPermission('onboarding', 'create'), sendWelcomeEmailAll);
+router.post('/onboarding/:id/promote', checkPermission('onboarding', 'approve'), promoteCandidate);
 
 // Reports
-router.get('/reports', getHRReports);
+router.get('/reports', checkPermission('reports', 'view'), getHRReports);
 
 module.exports = router;
-

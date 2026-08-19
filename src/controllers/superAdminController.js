@@ -359,6 +359,7 @@ const changeAnyUserRole = async (req, res, next) => {
   try {
     const schema = z.object({
       role: z.enum(['SUPERADMIN', 'ADMIN', 'HR', 'MANAGER', 'EMPLOYEE', 'CANDIDATE']),
+      customRoleId: z.string().optional().nullable(),
     });
 
     const parsed = schema.safeParse(req.body);
@@ -366,10 +367,18 @@ const changeAnyUserRole = async (req, res, next) => {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.issues?.[0]?.message || 'Validation error' } });
     }
 
+    let validCustomRoleId = null;
+    if (parsed.data.customRoleId && parsed.data.role !== 'SUPERADMIN') {
+      const customRole = await prisma.customRole.findUnique({ where: { id: parsed.data.customRoleId } });
+      if (customRole && customRole.status === 'ACTIVE') {
+        validCustomRoleId = customRole.id;
+      }
+    }
+
     const updated = await prisma.user.update({
       where: { id: req.params.id },
-      data: { role: parsed.data.role },
-      select: { id: true, email: true, role: true },
+      data: { role: parsed.data.role, customRoleId: validCustomRoleId },
+      select: { id: true, email: true, role: true, customRoleId: true },
     });
 
     if (req.user) {
@@ -377,13 +386,55 @@ const changeAnyUserRole = async (req, res, next) => {
         data: {
           userId: req.user.userId,
           action: 'CHANGE_USER_ROLE',
-          details: `Changed role of user ${updated.email} to ${updated.role}`,
+          details: `Changed role of user ${updated.email} to ${updated.role} ${validCustomRoleId ? 'with custom override' : ''}`,
           ipAddress: req.ip || req.socket.remoteAddress
         }
       });
     }
 
     return res.status(200).json({ success: true, data: updated, message: 'User role updated.' });
+  } catch (err) { next(err); }
+};
+
+// ─────────────────────────────────────────
+// REVOKE ROLE of any user  →  POST /api/superadmin/users/:id/revoke-role
+// ─────────────────────────────────────────
+const revokeAnyUserRole = async (req, res, next) => {
+  try {
+    const targetUser = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      include: { customRole: true, employeeProfile: true, candidateProfile: true }
+    });
+    if (!targetUser || targetUser.role === 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+    }
+
+    const previousRole = targetUser.customRole?.name || targetUser.role;
+    const fallbackRole = targetUser.role === 'CANDIDATE' ? 'CANDIDATE' : 'EMPLOYEE';
+    const userName = targetUser.employeeProfile?.fullName || targetUser.candidateProfile?.fullName || targetUser.email;
+
+    const user = await prisma.user.update({
+      where: { id: req.params.id },
+      data: { role: fallbackRole, customRoleId: null },
+      select: { id: true, email: true, role: true, customRoleId: true },
+    });
+
+    if (req.user?.userId) {
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user.userId,
+          action: 'REVOKE_USER_ROLE',
+          details: `Revoked role "${previousRole}" from ${userName} (${user.email}). Reverted to ${fallbackRole}.`,
+          ipAddress: req.ip || req.socket.remoteAddress
+        }
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: user,
+      message: `Role ${previousRole} revoked for ${user.email}.`
+    });
   } catch (err) { next(err); }
 };
 
@@ -589,6 +640,9 @@ const createUser = async (req, res, next) => {
       departmentId: z.string().optional(),
       status: z.string().optional(),
       password: z.string().optional(),
+      salary: z.union([z.number(), z.string()]).optional().nullable(),
+      baseSalary: z.union([z.number(), z.string()]).optional().nullable(),
+      monthlyCTC: z.union([z.number(), z.string()]).optional().nullable(),
     });
 
     const parsed = schema.safeParse(req.body);
@@ -607,6 +661,9 @@ const createUser = async (req, res, next) => {
       if (org) orgId = org.id;
     }
 
+    const rawSalary = req.body.salary ?? req.body.baseSalary ?? req.body.monthlyCTC;
+    const salaryVal = rawSalary !== undefined && rawSalary !== null && rawSalary !== '' ? Number(rawSalary) : null;
+
     const passwordHash = await bcrypt.hash(password || 'password123', 10);
     const user = await prisma.user.create({
       data: {
@@ -620,7 +677,23 @@ const createUser = async (req, res, next) => {
             fullName: name,
             employeeId: 'EMP-' + Math.floor(Math.random() * 100000),
             departmentId: req.body.departmentId || undefined,
+            ...(salaryVal !== null && !isNaN(salaryVal) && salaryVal > 0 && {
+              compensationProfile: {
+                create: {
+                  baseSalary: salaryVal,
+                  monthlyCTC: salaryVal,
+                  annualCTC: salaryVal * 12,
+                  effectiveDate: new Date(),
+                  status: 'Active'
+                }
+              }
+            })
           }
+        }
+      },
+      include: {
+        employeeProfile: {
+          include: { compensationProfile: true }
         }
       }
     });
@@ -630,7 +703,7 @@ const createUser = async (req, res, next) => {
         data: {
           userId: req.user.userId,
           action: 'CREATE_USER',
-          details: `Created user ${email} with role ${roleEnum}`,
+          details: `Created user ${email} with role ${roleEnum}${salaryVal ? ` and allocated salary $${salaryVal}` : ''}`,
           ipAddress: req.ip || req.socket.remoteAddress
         }
       });
@@ -642,7 +715,7 @@ const createUser = async (req, res, next) => {
 
 const updateUser = async (req, res, next) => {
   try {
-    const { name, email, role, department, empType, status, phone, address, manager, shiftId, overtimePolicyId, salaryType, hourlyRate, departmentId, password } = req.body;
+    const { name, email, role, department, empType, status, phone, address, manager, shiftId, overtimePolicyId, salaryType, hourlyRate, departmentId, password, salary, baseSalary, monthlyCTC } = req.body;
     let orgId = undefined;
     if (department) {
       const org = await prisma.organization.findFirst({ where: { name: department } });
@@ -663,6 +736,9 @@ const updateUser = async (req, res, next) => {
       });
       if (managerUser) managerId = managerUser.id;
     }
+
+    const rawSalary = salary ?? baseSalary ?? monthlyCTC;
+    const salaryVal = rawSalary !== undefined && rawSalary !== null && rawSalary !== '' ? Number(rawSalary) : undefined;
 
     // We can update the EmployeeProfile with all these fields
     const empData = {
@@ -695,8 +771,38 @@ const updateUser = async (req, res, next) => {
             ...empData
           }
         }
+      },
+      include: {
+        employeeProfile: {
+          include: { compensationProfile: true }
+        }
       }
     });
+    const empProfileId = user.employeeProfile?.id || existingUser.employeeProfile?.id;
+    if (empProfileId && salaryVal !== undefined && !isNaN(salaryVal)) {
+      if (salaryVal > 0) {
+        await prisma.compensationProfile.upsert({
+          where: { employeeId: empProfileId },
+          update: {
+            baseSalary: salaryVal,
+            monthlyCTC: salaryVal,
+            annualCTC: salaryVal * 12
+          },
+          create: {
+            employeeId: empProfileId,
+            baseSalary: salaryVal,
+            monthlyCTC: salaryVal,
+            annualCTC: salaryVal * 12,
+            effectiveDate: new Date(),
+            status: 'Active'
+          }
+        });
+      } else {
+        await prisma.compensationProfile.deleteMany({
+          where: { employeeId: empProfileId }
+        });
+      }
+    }
 
     if (req.user) {
       await prisma.auditLog.create({
@@ -709,27 +815,143 @@ const updateUser = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({ success: true, data: user });
+    const finalUser = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      include: {
+        employeeProfile: {
+          include: { compensationProfile: true }
+        }
+      }
+    });
+
+    return res.status(200).json({ success: true, data: finalUser || user });
   } catch (err) { next(err); }
 };
 
 const deleteUser = async (req, res, next) => {
   try {
-    const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
-    await prisma.user.delete({ where: { id: req.params.id } });
+    const userId = req.params.id;
+    const existing = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        employeeProfile: true,
+        candidateProfile: true
+      }
+    });
 
-    if (req.user && existing) {
-      await prisma.auditLog.create({
-        data: {
-          userId: req.user.userId,
-          action: 'DELETE_USER',
-          details: `Deleted user: ${existing.email}`,
-          ipAddress: req.ip || req.socket.remoteAddress
-        }
-      });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'User not found.' } });
     }
 
-    return res.status(200).json({ success: true, message: 'User deleted' });
+    if (existing.role === 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Super Admin accounts cannot be deleted.' } });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Employee-related cleanup
+      if (existing.employeeProfile) {
+        const empId = existing.employeeProfile.id;
+
+        // Unassign direct reports where this employee is the manager
+        await tx.employeeProfile.updateMany({
+          where: { managerId: empId },
+          data: { managerId: null }
+        });
+
+        // Delete interviews where this employee was the interviewer
+        await tx.interview.deleteMany({
+          where: { interviewerId: empId }
+        });
+
+        // Delete approval logs where this employee was the approver
+        await tx.approvalLog.deleteMany({
+          where: { approverId: empId }
+        });
+
+        // Delete other employee-linked records
+        await tx.payrollSnapshot.deleteMany({ where: { employeeId: empId } });
+        await tx.payslip.deleteMany({ where: { employeeId: empId } });
+        await tx.bonus.deleteMany({ where: { employeeId: empId } });
+        await tx.salaryIncrementRequest.deleteMany({ where: { employeeId: empId } });
+        await tx.employeeSalaryComponent.deleteMany({ where: { employeeId: empId } });
+        await tx.employeeDeduction.deleteMany({ where: { employeeId: empId } });
+        await tx.employeeBenefit.deleteMany({ where: { employeeId: empId } });
+        await tx.benefitClaim.deleteMany({ where: { employeeId: empId } });
+        await tx.performanceGoal.deleteMany({ where: { employeeId: empId } });
+        await tx.performanceReview.deleteMany({ where: { employeeId: empId } });
+        await tx.task.deleteMany({ where: { employeeId: empId } });
+        await tx.employeeSkill.deleteMany({ where: { employeeId: empId } });
+        await tx.compensationVersion.deleteMany({ where: { employeeId: empId } });
+        await tx.compensationProfile.deleteMany({ where: { employeeId: empId } });
+        await tx.exitLifecycle.deleteMany({ where: { employeeId: empId } });
+      }
+
+      // 2. Candidate-related cleanup
+      if (existing.candidateProfile) {
+        const candId = existing.candidateProfile.id;
+        const apps = await tx.jobApplication.findMany({
+          where: { candidateId: candId },
+          select: { id: true }
+        });
+        const appIds = apps.map(a => a.id);
+        if (appIds.length > 0) {
+          await tx.interview.deleteMany({ where: { applicationId: { in: appIds } } });
+          await tx.offer.deleteMany({ where: { applicationId: { in: appIds } } });
+          await tx.onboarding.deleteMany({ where: { applicationId: { in: appIds } } });
+          await tx.exitLifecycle.deleteMany({ where: { applicationId: { in: appIds } } });
+          await tx.jobApplication.deleteMany({ where: { id: { in: appIds } } });
+        }
+      }
+
+      // 3. User-level relations
+      const userNames = [
+        existing.email,
+        existing.employeeProfile?.fullName,
+        existing.candidateProfile?.fullName
+      ].filter(Boolean);
+
+      // Automatically unassign this user if they were head of any departments
+      await tx.department.updateMany({
+        where: { head: { in: userNames } },
+        data: { head: null }
+      });
+
+      await tx.ticketMessage.deleteMany({ where: { senderId: userId } });
+      await tx.supportTicket.deleteMany({ where: { userId } });
+      await tx.attendanceLog.deleteMany({ where: { userId } });
+      await tx.leaveRequest.deleteMany({ where: { userId } });
+      await tx.document.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.policyAcknowledgment.deleteMany({ where: { userId } });
+      await tx.customRole.updateMany({ where: { createdById: userId }, data: { createdById: null } });
+      await tx.customRole.updateMany({ where: { updatedById: userId }, data: { updatedById: null } });
+      await tx.auditLog.updateMany({ where: { userId }, data: { userId: null } });
+
+      // 4. Finally delete the user
+      await tx.user.delete({ where: { id: userId } });
+    });
+
+    if (existing) {
+      try {
+        let actorId = null;
+        if (req.user?.userId) {
+          const actorExists = await prisma.user.findUnique({ where: { id: req.user.userId } });
+          if (actorExists) actorId = actorExists.id;
+        }
+        await prisma.auditLog.create({
+          data: {
+            userId: actorId,
+            action: 'DELETE_USER',
+            details: `Deleted user: ${existing.email} (${existing.role})`,
+            ipAddress: req.ip || req.socket.remoteAddress
+          }
+        });
+      } catch (auditErr) {
+        console.error('Failed to create audit log on deleteUser:', auditErr);
+      }
+    }
+
+    return res.status(200).json({ success: true, message: 'User deleted successfully' });
   } catch (err) { next(err); }
 };
 
@@ -738,22 +960,37 @@ const deleteUser = async (req, res, next) => {
 // ─────────────────────────────────────────
 const getAllPlatformDepartments = async (req, res, next) => {
   try {
-    const depts = await prisma.department.findMany({
-      include: {
-        organization: { select: { id: true, name: true } },
-        _count: { select: { employees: true } }
-      },
-      orderBy: { name: 'asc' }
-    });
+    const [depts, users] = await Promise.all([
+      prisma.department.findMany({
+        include: {
+          organization: { select: { id: true, name: true } },
+          _count: { select: { employees: true } }
+        },
+        orderBy: { name: 'asc' }
+      }),
+      prisma.user.findMany({
+        include: {
+          employeeProfile: { select: { fullName: true } },
+          candidateProfile: { select: { fullName: true } }
+        }
+      })
+    ]);
 
-    const mapped = depts.map(d => ({
-      id: d.id,
-      name: d.name,
-      head: d.head || 'None',
-      count: d._count.employees,
-      organizationId: d.organizationId,
-      organizationName: d.organization?.name || 'Unknown'
-    }));
+    const validNames = new Set(
+      users.flatMap(u => [u.employeeProfile?.fullName, u.candidateProfile?.fullName, u.email]).filter(Boolean)
+    );
+
+    const mapped = depts.map(d => {
+      const isValidHead = d.head && d.head !== 'None' && validNames.has(d.head);
+      return {
+        id: d.id,
+        name: d.name,
+        head: isValidHead ? d.head : 'None',
+        count: d._count.employees,
+        organizationId: d.organizationId,
+        organizationName: d.organization?.name || 'Unknown'
+      };
+    });
 
     return res.status(200).json({ success: true, data: mapped });
   } catch (err) { next(err); }
@@ -763,7 +1000,7 @@ const createPlatformDepartment = async (req, res, next) => {
   try {
     const schema = z.object({
       name: z.string().min(2),
-      head: z.string().optional(),
+      head: z.string().optional().nullable(),
       organizationId: z.string().uuid()
     });
 
@@ -773,11 +1010,12 @@ const createPlatformDepartment = async (req, res, next) => {
     }
 
     const { name, head, organizationId } = parsed.data;
+    const cleanHead = head && head.trim() !== '' && head !== 'None' ? head.trim() : null;
 
     const dept = await prisma.department.create({
       data: {
         name,
-        head: head || 'None',
+        head: cleanHead,
         organizationId
       }
     });
@@ -789,12 +1027,13 @@ const createPlatformDepartment = async (req, res, next) => {
 const updatePlatformDepartment = async (req, res, next) => {
   try {
     const { name, head, organizationId } = req.body;
+    const cleanHead = head !== undefined ? (head && head.trim() !== '' && head !== 'None' ? head.trim() : null) : undefined;
 
     const dept = await prisma.department.update({
       where: { id: req.params.id },
       data: {
         ...(name && { name }),
-        ...(head !== undefined && { head: head || 'None' }),
+        ...(cleanHead !== undefined && { head: cleanHead }),
         ...(organizationId && { organizationId })
       }
     });
@@ -931,9 +1170,8 @@ const createPayslip = async (req, res, next) => {
     });
 
     if (!empProfile && employeeId) {
-      // fallback if they passed employeeName inside employeeId by mistake, or profile uuid
       empProfile = await prisma.employeeProfile.findFirst({
-        where: { id: employeeId }
+        where: { OR: [{ id: employeeId }, { userId: employeeId }] }
       });
     }
 
@@ -941,60 +1179,194 @@ const createPayslip = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Employee not found' });
     }
 
-    const settings = await prisma.globalSettings.findFirst();
-    let currencyCode = 'USD';
-    if (settings?.masterCurrency) {
-      const curr = settings.masterCurrency;
-      if (curr.includes('INR') || curr.includes('₹')) currencyCode = 'INR';
-      else if (curr.includes('EUR') || curr.includes('€')) currencyCode = 'EUR';
-      else if (curr.includes('GBP') || curr.includes('£')) currencyCode = 'GBP';
-      else if (curr.includes('AED') || curr.includes('د.إ')) currencyCode = 'AED';
-    }
+    const b = Number(basic || 0);
+    const a = Number(allowance || (b * 0.1));
+    const bon = Number(bonus || 0);
+    const gross = b + a + bon;
+    const p = Number(pf || (b * 0.12));
+    const t = Number(tax || (b * 0.1));
+    const ded = p + t;
+    const net = finalNetPay !== undefined ? Number(finalNetPay) : (gross - ded);
+    const targetMonth = month || new Date().toLocaleString('default', { month: 'long' });
 
-    const payslip = await prisma.payslip.create({
+    const snapshot = await prisma.payrollSnapshot.create({
       data: {
         employeeId: empProfile.id,
-        month,
-        basic,
-        hra: 0, // default 0 if not passed
-        allowance,
-        bonus,
-        pf,
-        tax,
-        netPay: finalNetPay,
+        month: targetMonth,
+        monthlyCTC: b,
+        grossSalary: gross,
+        totalDeductions: ded,
+        totalContributions: bon,
+        netSalary: net,
         status: status || 'Draft',
-        paymentDate: paymentDate ? new Date(paymentDate) : null,
-        currency: currencyCode
-      }
+        paymentDate: status === 'Paid' ? new Date() : (paymentDate ? new Date(paymentDate) : null),
+        items: {
+          create: [
+            { name: 'Basic Salary', code: 'BASE', type: 'Earning', amount: b },
+            { name: 'Allowances', code: 'ALLOWANCE', type: 'Earning', amount: a },
+            ...(bon > 0 ? [{ name: 'Bonus', code: 'BONUS', type: 'Earning', amount: bon }] : []),
+            { name: 'Provident Fund (PF)', code: 'PF', type: 'Deduction', amount: p },
+            { name: 'Income Tax', code: 'TAX', type: 'Deduction', amount: t },
+          ]
+        }
+      },
+      include: { items: true, employee: true }
     });
 
-    res.status(201).json({ success: true, data: payslip });
+    try {
+      await prisma.payslip.create({
+        data: {
+          employeeId: empProfile.id,
+          month: targetMonth,
+          basic: b,
+          hra: 0,
+          allowance: a,
+          bonus: bon,
+          pf: p,
+          tax: t,
+          netPay: net,
+          status: status || 'Draft',
+          paymentDate: status === 'Paid' ? new Date() : (paymentDate ? new Date(paymentDate) : null),
+          currency: 'USD'
+        }
+      });
+    } catch (_) {}
+
+    res.status(201).json({ success: true, data: snapshot });
   } catch (err) { next(err); }
 };
 
 const updatePayslip = async (req, res, next) => {
   try {
+    const id = req.params.id;
     const { basic, allowance, bonus, pf, tax, netPay, status } = req.body;
     const finalNetPay = netPay !== undefined ? netPay : req.body.net;
-    const payslip = await prisma.payslip.update({
-      where: { id: req.params.id },
-      data: {
-        ...(basic !== undefined && { basic }),
-        ...(allowance !== undefined && { allowance }),
-        ...(bonus !== undefined && { bonus }),
-        ...(pf !== undefined && { pf }),
-        ...(tax !== undefined && { tax }),
-        ...(finalNetPay !== undefined && { netPay: finalNetPay }),
-        ...(status !== undefined && { status }),
+
+    // 1. Check if it's an unprocessed record e.g. "unprocessed-<userId>"
+    if (id && id.startsWith('unprocessed-')) {
+      const userId = id.replace('unprocessed-', '');
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          employeeProfile: {
+            include: { compensationProfile: true }
+          }
+        }
+      });
+      if (user?.employeeProfile) {
+        const empId = user.employeeProfile.id;
+        const b = Number(basic ?? user.employeeProfile.compensationProfile?.baseSalary ?? user.employeeProfile.compensationProfile?.monthlyCTC ?? 0);
+        const a = Number(allowance ?? (b * 0.1));
+        const bon = Number(bonus ?? 0);
+        const gross = b + a + bon;
+        const p = Number(pf ?? (b * 0.12));
+        const t = Number(tax ?? (b * 0.1));
+        const ded = p + t;
+        const net = finalNetPay !== undefined ? Number(finalNetPay) : (gross - ded);
+        const month = req.body.month || new Date().toLocaleString('default', { month: 'long' });
+
+        const snapshot = await prisma.payrollSnapshot.create({
+          data: {
+            employeeId: empId,
+            month,
+            monthlyCTC: b,
+            grossSalary: gross,
+            totalDeductions: ded,
+            totalContributions: bon,
+            netSalary: net,
+            status: status || 'Paid',
+            paymentDate: status === 'Paid' ? new Date() : (req.body.paymentDate ? new Date(req.body.paymentDate) : null),
+            items: {
+              create: [
+                { name: 'Basic Salary', code: 'BASE', type: 'Earning', amount: b },
+                { name: 'Allowances', code: 'ALLOWANCE', type: 'Earning', amount: a },
+                ...(bon > 0 ? [{ name: 'Bonus', code: 'BONUS', type: 'Earning', amount: bon }] : []),
+                { name: 'Provident Fund (PF)', code: 'PF', type: 'Deduction', amount: p },
+                { name: 'Income Tax', code: 'TAX', type: 'Deduction', amount: t },
+              ]
+            }
+          },
+          include: { items: true, employee: true }
+        });
+
+        try {
+          await prisma.payslip.create({
+            data: {
+              employeeId: empId,
+              month,
+              basic: b,
+              hra: 0,
+              allowance: a,
+              bonus: bon,
+              pf: p,
+              tax: t,
+              netPay: net,
+              status: status || 'Paid',
+              paymentDate: status === 'Paid' ? new Date() : null,
+              currency: 'USD'
+            }
+          });
+        } catch (_) {}
+
+        return res.status(200).json({ success: true, data: snapshot });
       }
+    }
+
+    // 2. Check if snapshot exists
+    const snapshot = await prisma.payrollSnapshot.findUnique({
+      where: { id },
+      include: { items: true }
     });
-    res.status(200).json({ success: true, data: payslip });
+    if (snapshot) {
+      const updated = await prisma.payrollSnapshot.update({
+        where: { id },
+        data: {
+          ...(finalNetPay !== undefined && { netSalary: Number(finalNetPay) }),
+          ...(basic !== undefined && { grossSalary: Number(basic) + Number(allowance || 0) + Number(bonus || 0) }),
+          ...(status !== undefined && {
+            status,
+            paymentDate: status === 'Paid' ? new Date() : (status === 'Draft' ? null : snapshot.paymentDate)
+          })
+        },
+        include: { items: true, employee: true }
+      });
+      return res.status(200).json({ success: true, data: updated });
+    }
+
+    // 3. Check if payslip exists
+    const payslip = await prisma.payslip.findUnique({ where: { id } });
+    if (payslip) {
+      const updated = await prisma.payslip.update({
+        where: { id },
+        data: {
+          ...(basic !== undefined && { basic: Number(basic) }),
+          ...(allowance !== undefined && { allowance: Number(allowance) }),
+          ...(bonus !== undefined && { bonus: Number(bonus) }),
+          ...(pf !== undefined && { pf: Number(pf) }),
+          ...(tax !== undefined && { tax: Number(tax) }),
+          ...(finalNetPay !== undefined && { netPay: Number(finalNetPay) }),
+          ...(status !== undefined && {
+            status,
+            paymentDate: status === 'Paid' ? new Date() : (status === 'Draft' ? null : payslip.paymentDate)
+          }),
+        }
+      });
+      return res.status(200).json({ success: true, data: updated });
+    }
+
+    return res.status(200).json({ success: true, message: 'Updated' });
   } catch (err) { next(err); }
 };
 
 const deletePayslip = async (req, res, next) => {
   try {
-    await prisma.payslip.delete({ where: { id: req.params.id } });
+    const id = req.params.id;
+    if (id && id.startsWith('unprocessed-')) {
+      return res.status(200).json({ success: true, message: 'Record removed' });
+    }
+    await prisma.payrollItem.deleteMany({ where: { snapshotId: id } });
+    await prisma.payrollSnapshot.deleteMany({ where: { id } });
+    await prisma.payslip.deleteMany({ where: { id } });
     res.status(200).json({ success: true, message: 'Payslip deleted successfully' });
   } catch (err) { next(err); }
 };
@@ -1005,11 +1377,52 @@ const bulkApprovePayslips = async (req, res, next) => {
     if (!ids || !Array.isArray(ids)) {
       return res.status(400).json({ success: false, message: 'Invalid payload' });
     }
-    await prisma.payslip.updateMany({
-      where: { id: { in: ids } },
-      data: { status: 'Approved' }
-    });
-    res.status(200).json({ success: true, message: 'Bulk approved successfully' });
+    for (const id of ids) {
+      if (id.startsWith('unprocessed-')) {
+        const userId = id.replace('unprocessed-', '');
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          include: { employeeProfile: { include: { compensationProfile: true } } }
+        });
+        if (user?.employeeProfile) {
+          const b = Number(user.employeeProfile.compensationProfile?.baseSalary || user.employeeProfile.compensationProfile?.monthlyCTC || 0);
+          const a = b * 0.1;
+          const gross = b + a;
+          const ded = (b * 0.12) + (b * 0.1);
+          const net = gross - ded;
+          await prisma.payrollSnapshot.create({
+            data: {
+              employeeId: user.employeeProfile.id,
+              month: new Date().toLocaleString('default', { month: 'long' }),
+              monthlyCTC: b,
+              grossSalary: gross,
+              totalDeductions: ded,
+              netSalary: net,
+              status: 'Paid',
+              paymentDate: new Date(),
+              items: {
+                create: [
+                  { name: 'Basic Salary', code: 'BASE', type: 'Earning', amount: b },
+                  { name: 'Allowances', code: 'ALLOWANCE', type: 'Earning', amount: a },
+                  { name: 'Provident Fund (PF)', code: 'PF', type: 'Deduction', amount: b * 0.12 },
+                  { name: 'Income Tax', code: 'TAX', type: 'Deduction', amount: b * 0.1 },
+                ]
+              }
+            }
+          });
+        }
+      } else {
+        await prisma.payrollSnapshot.updateMany({
+          where: { id },
+          data: { status: 'Paid', paymentDate: new Date() }
+        });
+        await prisma.payslip.updateMany({
+          where: { id },
+          data: { status: 'Paid', paymentDate: new Date() }
+        });
+      }
+    }
+    res.status(200).json({ success: true, message: 'Bulk payout completed successfully' });
   } catch (err) { next(err); }
 };
 
@@ -1061,7 +1474,7 @@ module.exports = {
   getPlatformStats,
   getAllOrganizations, createOrganization, deleteOrganization,
   getAllPlatformUsers, createAdminForOrg,
-  toggleAnyUserActive, changeAnyUserRole,
+  toggleAnyUserActive, changeAnyUserRole, revokeAnyUserRole,
   getPlatformAuditLogs,
   getSystemHealth,
   getAnalytics,

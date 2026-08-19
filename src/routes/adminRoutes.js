@@ -4,16 +4,17 @@
 const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middlewares/authMiddleware');
+const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
   getDashboardStats,
   getOrganization, createOrganization, updateOrganization,
   getDepartments, createDepartment, updateDepartment, deleteDepartment,
-  getAllUsers, createUser, updateUser, changeUserRole, toggleUserActive, deleteUser,
+  getAllUsers, createUser, updateUser, changeUserRole, revokeUserRole, toggleUserActive, deleteUser,
   getAllPayslips, generatePayslip, markPayslipPaid,
   getAuditLogs,
   getPolicies, createPolicy, updatePolicy, deletePolicy, toggleArchivePolicy, renewPolicy, sendPolicyReminder,
-  getRoles, createRole, updateRole, deleteRole,
+  getRoles, createRole, updateRole, deleteRole, getRoleHistory,
   getHolidays, createHoliday, updateHoliday, deleteHoliday,
   getBenefitPlans, createBenefitPlan, updateBenefitPlan, deleteBenefitPlan,
   getAiModules, updateAiModule, getAiLogs, createAiLog,
@@ -43,130 +44,143 @@ const {
 
 const { getOrgChart } = require('../controllers/orgChartController');
 
-// Only ADMIN, SUPERADMIN, and HR (for shared dashboards like Payroll Center)
+// Base authentication & platform role check
 router.use(protect, authorize('ADMIN', 'SUPERADMIN', 'HR'));
 
-// Dashboard
-router.get('/stats', getDashboardStats);
+// Dashboard Stats
+router.get('/stats', checkPermission('dashboard', 'view'), getDashboardStats);
 
-// Organization
-router.get('/organization', getOrganization);
-router.post('/organization', createOrganization);
-router.put('/organization/:id', updateOrganization);
-router.post('/organizations/:id/complete-setup', (req, res) => res.status(200).json({ success: true, message: 'Setup marked complete' }));
+// Organization / Org Setup
+router.get('/organization', checkPermission('org_setup', 'view'), getOrganization);
+router.post('/organization', checkPermission('org_setup', 'create'), createOrganization);
+router.put('/organization/:id', checkPermission('org_setup', 'edit'), updateOrganization);
+router.post('/organizations/:id/complete-setup', checkPermission('org_setup', 'edit'), (req, res) => res.status(200).json({ success: true, message: 'Setup marked complete' }));
 
 // Departments
-router.get('/departments', getDepartments);
-router.post('/departments', createDepartment);
-router.put('/departments/:id', updateDepartment);
-router.delete('/departments/:id', deleteDepartment);
+router.get('/departments', checkPermission('departments', 'view'), getDepartments);
+router.post('/departments', checkPermission('departments', 'create'), createDepartment);
+router.put('/departments/:id', checkPermission('departments', 'edit'), updateDepartment);
+router.delete('/departments/:id', checkPermission('departments', 'delete'), deleteDepartment);
 
 // Organization Chart
-router.get('/org-chart', getOrgChart);
+router.get('/org-chart', checkPermission('departments', 'view'), getOrgChart);
 
 // Users
-router.get('/users', getAllUsers);
-router.post('/users', createUser);
-router.put('/users/:id', updateUser);
-router.patch('/users/:id/role', changeUserRole);
-router.patch('/users/:id/toggle-active', toggleUserActive);
-router.delete('/users/:id', deleteUser);
+router.get('/users', checkPermission('users', 'view'), getAllUsers);
+router.post('/users', checkPermission('users', 'create'), createUser);
+router.put('/users/:id', checkPermission('users', 'edit'), updateUser);
+router.patch('/users/:id/role', checkPermission('users', 'edit'), changeUserRole);
+router.post('/users/:id/revoke-role', checkPermission('users', 'edit'), revokeUserRole);
+router.patch('/users/:id/toggle-active', checkPermission('users', 'edit'), toggleUserActive);
+router.delete('/users/:id', checkPermission('users', 'delete'), deleteUser);
 
-// Payroll
-router.get('/payslips', getAllPayslips);
-router.post('/payslips', generatePayslip);
-router.patch('/payslips/:id/pay', markPayslipPaid);
+// Payroll Center & Payslips
+router.get('/payslips', checkPermission('payroll_center', 'view'), getAllPayslips);
+router.post('/payslips', checkPermission('payroll_center', 'create'), generatePayslip);
+router.patch('/payslips/:id/pay', checkPermission('payroll_center', 'approve'), markPayslipPaid);
 
-// Payroll Configuration (New Enterprise Payroll)
-router.get('/payroll-config/components', getSalaryComponents);
-router.post('/payroll-config/components', createSalaryComponent);
-router.put('/payroll-config/components/:id', updateSalaryComponent);
-router.delete('/payroll-config/components/:id', deleteSalaryComponent);
+// Payroll Configuration
+router.get('/payroll-config/components', checkPermission('payroll_center', 'view'), getSalaryComponents);
+router.post('/payroll-config/components', checkPermission('payroll_center', 'create'), createSalaryComponent);
+router.put('/payroll-config/components/:id', checkPermission('payroll_center', 'edit'), updateSalaryComponent);
+router.delete('/payroll-config/components/:id', checkPermission('payroll_center', 'delete'), deleteSalaryComponent);
 
-router.get('/payroll-config/deductions', getDeductions);
-router.post('/payroll-config/deductions', createDeduction);
-router.delete('/payroll-config/deductions/:id', deleteDeduction);
+router.get('/payroll-config/deductions', checkPermission('payroll_center', 'view'), getDeductions);
+router.post('/payroll-config/deductions', checkPermission('payroll_center', 'create'), createDeduction);
+router.delete('/payroll-config/deductions/:id', checkPermission('payroll_center', 'delete'), deleteDeduction);
 
-router.get('/payroll-config/taxes', getTaxRules);
-router.post('/payroll-config/taxes', createTaxRule);
-router.delete('/payroll-config/taxes/:id', deleteTaxRule);
+router.get('/payroll-config/taxes', checkPermission('payroll_center', 'view'), getTaxRules);
+router.post('/payroll-config/taxes', checkPermission('payroll_center', 'create'), createTaxRule);
+router.delete('/payroll-config/taxes/:id', checkPermission('payroll_center', 'delete'), deleteTaxRule);
 
 // Approval Workflows
-router.get('/workflows', getWorkflows);
-router.post('/workflows', createWorkflow);
+router.get('/workflows', checkPermission('approval_workflows', 'view'), getWorkflows);
+router.post('/workflows', checkPermission('approval_workflows', 'create'), createWorkflow);
 
 // Audit Logs
-router.get('/audit-logs', getAuditLogs);
+router.get('/audit-logs', checkPermission('audit_logs', 'view'), getAuditLogs);
 
-// Policies
-router.get('/policies', getPolicies);
-router.post('/policies', createPolicy);
-router.put('/policies/:id', updatePolicy);
-router.delete('/policies/:id', deletePolicy);
-router.patch('/policies/:id/archive', toggleArchivePolicy);
-router.post('/policies/:id/renew', renewPolicy);
-router.post('/policies/:id/remind', sendPolicyReminder);
+// Compliance Policies
+router.get('/policies', checkPermission('compliance', 'view'), getPolicies);
+router.post('/policies', checkPermission('compliance', 'create'), createPolicy);
+router.put('/policies/:id', checkPermission('compliance', 'edit'), updatePolicy);
+router.delete('/policies/:id', checkPermission('compliance', 'delete'), deletePolicy);
+router.patch('/policies/:id/archive', checkPermission('compliance', 'edit'), toggleArchivePolicy);
+router.post('/policies/:id/renew', checkPermission('compliance', 'create'), renewPolicy);
+router.post('/policies/:id/remind', checkPermission('compliance', 'edit'), sendPolicyReminder);
 
-// Roles & Permissions
-router.get('/roles', getRoles);
-router.post('/roles', createRole);
-router.put('/roles/:id', updateRole);
-router.delete('/roles/:id', deleteRole);
+// Roles & Permissions Matrix Management
+router.get('/roles', checkPermission('roles_permissions', 'view'), getRoles);
+router.get('/roles/history', checkPermission('roles_permissions', 'view'), getRoleHistory);
+router.post('/roles', checkPermission('roles_permissions', 'create'), createRole);
+router.put('/roles/:id', checkPermission('roles_permissions', 'edit'), updateRole);
+router.delete('/roles/:id', checkPermission('roles_permissions', 'delete'), deleteRole);
 
 // Holidays
-router.get('/holidays', getHolidays);
-router.post('/holidays', createHoliday);
-router.put('/holidays/:id', updateHoliday);
-router.delete('/holidays/:id', deleteHoliday);
+router.get('/holidays', checkPermission('holidays', 'view'), getHolidays);
+router.post('/holidays', checkPermission('holidays', 'create'), createHoliday);
+router.put('/holidays/:id', checkPermission('holidays', 'edit'), updateHoliday);
+router.delete('/holidays/:id', checkPermission('holidays', 'delete'), deleteHoliday);
 
 // Benefit Plans
-router.get('/benefits', getBenefitPlans);
-router.post('/benefits', createBenefitPlan);
-router.put('/benefits/:id', updateBenefitPlan);
-router.delete('/benefits/:id', deleteBenefitPlan);
+router.get('/benefits', checkPermission('benefits_config', 'view'), getBenefitPlans);
+router.post('/benefits', checkPermission('benefits_config', 'create'), createBenefitPlan);
+router.put('/benefits/:id', checkPermission('benefits_config', 'edit'), updateBenefitPlan);
+router.delete('/benefits/:id', checkPermission('benefits_config', 'delete'), deleteBenefitPlan);
 
 // AI Center
-router.get('/ai/modules', getAiModules);
-router.put('/ai/modules/:id', updateAiModule);
-router.get('/ai/logs', getAiLogs);
-router.post('/ai/logs', createAiLog);
+router.get('/ai/modules', checkPermission('ai_center', 'view'), getAiModules);
+router.put('/ai/modules/:id', checkPermission('ai_center', 'edit'), updateAiModule);
+router.get('/ai/logs', checkPermission('ai_center', 'view'), getAiLogs);
+router.post('/ai/logs', checkPermission('ai_center', 'create'), createAiLog);
 
 // System Integrations
-router.get('/integrations', getIntegrations);
-router.post('/integrations', createIntegration);
-router.put('/integrations/:id', updateIntegration);
-router.delete('/integrations/:id', deleteIntegration);
+router.get('/integrations', checkPermission('integrations', 'view'), getIntegrations);
+router.post('/integrations', checkPermission('integrations', 'create'), createIntegration);
+router.put('/integrations/:id', checkPermission('integrations', 'edit'), updateIntegration);
+router.delete('/integrations/:id', checkPermission('integrations', 'delete'), deleteIntegration);
 
 // Billing & Invoices
-router.get('/billing/plan', getBillingPlan);
-router.put('/billing/plan/:id', updateBillingPlan);
-router.get('/billing/invoices', getInvoices);
-router.post('/billing/invoices', createInvoice);
-router.put('/billing/invoices/:id', updateInvoice);
-router.delete('/billing/invoices/:id', deleteInvoice);
-router.get('/billing/invoices/export', exportInvoices);
+router.get('/billing/plan', checkPermission('billing', 'view'), getBillingPlan);
+router.put('/billing/plan/:id', checkPermission('billing', 'edit'), updateBillingPlan);
+router.get('/billing/invoices', checkPermission('billing', 'view'), getInvoices);
+router.post('/billing/invoices', checkPermission('billing', 'create'), createInvoice);
+router.put('/billing/invoices/:id', checkPermission('billing', 'edit'), updateInvoice);
+router.delete('/billing/invoices/:id', checkPermission('billing', 'delete'), deleteInvoice);
+router.get('/billing/invoices/export', checkPermission('billing', 'view'), exportInvoices);
 
 // Attendance & Leaves
-router.get('/attendance', getAllAttendance);
-router.post('/attendance', addManualAttendance);
-router.get('/leaves', getAllLeaves);
-router.patch('/leaves/:id', reviewLeave);
+router.get('/attendance', checkPermission('dashboard', 'view'), getAllAttendance);
+router.post('/attendance', checkPermission('dashboard', 'create'), addManualAttendance);
+router.get('/leaves', checkPermission('dashboard', 'view'), getAllLeaves);
+router.patch('/leaves/:id', checkPermission('dashboard', 'approve'), reviewLeave);
 
 // Resignations
-router.get('/resignations', getAdminResignations);
-router.patch('/resignations/:id/override', overrideResignation);
+router.get('/resignations', checkPermission('resignations', 'view'), getAdminResignations);
+router.patch('/resignations/:id/override', checkPermission('resignations', 'approve'), overrideResignation);
 
 // Shifts
-router.get('/shifts', getShifts);
-router.post('/shifts', createShift);
-router.put('/shifts/:id', updateShift);
-router.delete('/shifts/:id', deleteShift);
+router.get('/shifts', checkPermission('shift_management', 'view'), getShifts);
+router.post('/shifts', checkPermission('shift_management', 'create'), createShift);
+router.put('/shifts/:id', checkPermission('shift_management', 'edit'), updateShift);
+router.delete('/shifts/:id', checkPermission('shift_management', 'delete'), deleteShift);
 
 // Overtime Policies
-router.get('/overtime-policies', getOvertimePolicies);
-router.post('/overtime-policies', createOvertimePolicy);
-router.put('/overtime-policies/:id', updateOvertimePolicy);
-router.delete('/overtime-policies/:id', deleteOvertimePolicy);
+router.get('/overtime-policies', checkPermission('overtime_rules', 'view'), getOvertimePolicies);
+router.post('/overtime-policies', checkPermission('overtime_rules', 'create'), createOvertimePolicy);
+router.put('/overtime-policies/:id', checkPermission('overtime_rules', 'edit'), updateOvertimePolicy);
+router.delete('/overtime-policies/:id', checkPermission('overtime_rules', 'delete'), deleteOvertimePolicy);
+
+// Holidays
+router.get('/holidays', checkPermission('holidays', 'view'), getHolidays);
+router.post('/holidays', checkPermission('holidays', 'create'), createHoliday);
+router.put('/holidays/:id', checkPermission('holidays', 'edit'), updateHoliday);
+router.delete('/holidays/:id', checkPermission('holidays', 'delete'), deleteHoliday);
+
+// Benefit Plans
+router.get('/benefits', checkPermission('benefits_config', 'view'), getBenefitPlans);
+router.post('/benefits', checkPermission('benefits_config', 'create'), createBenefitPlan);
+router.put('/benefits/:id', checkPermission('benefits_config', 'edit'), updateBenefitPlan);
+router.delete('/benefits/:id', checkPermission('benefits_config', 'delete'), deleteBenefitPlan);
 
 module.exports = router;
-
