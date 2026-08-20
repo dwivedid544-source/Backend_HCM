@@ -1279,7 +1279,106 @@ const reviewManagerReimbursement = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ─────────────────────────────────────────
+// 14. GET MANAGER DASHBOARD METRICS  →  GET /api/manager/dashboard
+// ─────────────────────────────────────────
+const getManagerDashboard = async (req, res, next) => {
+  try {
+    const orgId = req.user.organizationId || (await prisma.organization.findFirst({ select: { id: true } }))?.id;
+    const managerUserId = req.user.userId;
+
+    // Find manager profile
+    const managerProfile = await prisma.employeeProfile.findUnique({
+      where: { userId: managerUserId }
+    });
+
+    let teamMembers = [];
+    if (managerProfile) {
+      teamMembers = await prisma.employeeProfile.findMany({
+        where: { managerId: managerProfile.id },
+        select: { id: true, fullName: true, department: true }
+      });
+    }
+
+    const teamIds = teamMembers.map(m => m.id);
+
+    // Today's attendance
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let todayAttendance = [];
+    try {
+      todayAttendance = await prisma.attendanceLog.findMany({
+        where: {
+          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
+          date: { gte: today, lt: tomorrow }
+        }
+      });
+    } catch (e) {}
+
+    const presentCount = todayAttendance.filter(a => a.status === 'Present' || a.clockIn).length;
+    const absentCount = Math.max(0, teamMembers.length - presentCount);
+
+    // Pending leaves
+    let pendingLeaves = [];
+    try {
+      pendingLeaves = await prisma.leaveRequest.findMany({
+        where: {
+          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
+          status: { in: ['Pending', 'PENDING'] }
+        },
+        include: { employee: { select: { fullName: true } } }
+      });
+    } catch (e) {}
+
+    // Pending Reimbursements
+    let pendingReimbursements = [];
+    try {
+      pendingReimbursements = await prisma.reimbursementClaim.findMany({
+        where: {
+          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
+          status: 'PENDING'
+        }
+      });
+    } catch (e) {}
+
+    // Active Tasks
+    let activeTasks = [];
+    try {
+      activeTasks = await prisma.task.findMany({
+        where: {
+          assignedToId: { in: teamIds.length > 0 ? teamIds : ['none'] },
+          status: { in: ['Pending', 'IN_PROGRESS', 'PENDING'] }
+        },
+        orderBy: { dueDate: 'asc' },
+        take: 5
+      });
+    } catch (e) {}
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        metrics: {
+          teamSize: teamMembers.length,
+          presentToday: presentCount,
+          absentToday: absentCount,
+          pendingLeaveApprovals: pendingLeaves.length,
+          pendingReimbursements: pendingReimbursements.length,
+          activeTasksCount: activeTasks.length
+        },
+        pendingLeaves,
+        activeTasks
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
+  getManagerDashboard,
   getTeam, addTeamMember,
   getTeamLeaves, reviewLeave,
   assignTask, getTeamTasks, updateTask,

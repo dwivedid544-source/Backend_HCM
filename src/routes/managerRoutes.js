@@ -7,6 +7,7 @@ const { protect, authorize } = require('../middlewares/authMiddleware');
 const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
+  getManagerDashboard,
   getTeam, addTeamMember,
   getTeamLeaves, reviewLeave,
   assignTask, getTeamTasks, updateTask,
@@ -22,6 +23,9 @@ const {
 
 // Base authentication & platform role check
 router.use(protect, authorize('MANAGER', 'ADMIN', 'SUPERADMIN'));
+
+// Dashboard
+router.get('/dashboard', checkPermission('team_members', 'view'), getManagerDashboard);
 
 // Team Members
 router.get('/team', checkPermission('team_members', 'view'), getTeam);
