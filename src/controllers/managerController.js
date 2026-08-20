@@ -1382,7 +1382,7 @@ const getManagerDashboard = async (req, res, next) => {
     const pendingLeaves = await prisma.leaveRequest.findMany({
       where: {
         userId: { in: directUserIds },
-        status: { in: ['PENDING', 'Pending'] }
+        status: 'PENDING'
       },
       include: {
         user: { select: { employeeProfile: { select: { fullName: true, avatarUrl: true } } } }
