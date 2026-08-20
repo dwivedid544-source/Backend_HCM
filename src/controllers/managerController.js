@@ -1423,17 +1423,6 @@ const getManagerDashboard = async (req, res, next) => {
         console.warn('Dashboard pendingLeaves query warning:', e.message);
       }
     }
-    // Pending Leave requests for direct reports
-    const pendingLeaves = await prisma.leaveRequest.findMany({
-      where: {
-        userId: { in: directUserIds },
-        status: 'PENDING'
-      },
-      include: {
-        user: { select: { employeeProfile: { select: { fullName: true, avatarUrl: true } } } }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
 
     // Pending Reimbursements for direct reports
     let pendingReimbursements = 0;

@@ -27,7 +27,7 @@ router.use(protect);
 router.post('/image', upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
+      return res.status(400).json({ success: false, error: { message: 'No file uploaded' } });
     }
 
     const folder = req.query.folder || 'hcm/images';
@@ -35,8 +35,11 @@ router.post('/image', upload.single('file'), async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
+      message: 'Image uploaded successfully',
       data: {
         url: result.url,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
         publicId: result.publicId,
         provider: result.provider,
       },
@@ -53,7 +56,7 @@ router.post('/image', upload.single('file'), async (req, res, next) => {
 router.post('/document', upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
+      return res.status(400).json({ success: false, error: { message: 'No file uploaded' } });
     }
 
     const folder = req.query.folder || 'hcm/documents';
@@ -61,8 +64,11 @@ router.post('/document', upload.single('file'), async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
+      message: 'Document uploaded successfully',
       data: {
         url: result.url,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
         fileId: result.fileId,
         provider: result.provider,
       },
@@ -78,7 +84,7 @@ router.post('/document', upload.single('file'), async (req, res, next) => {
 router.post('/auto', upload.single('file'), async (req, res, next) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
+      return res.status(400).json({ success: false, error: { message: 'No file uploaded' } });
     }
 
     const folder = req.query.folder || 'hcm/uploads';
@@ -86,9 +92,13 @@ router.post('/auto', upload.single('file'), async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
+      message: 'File uploaded successfully',
       data: {
         url: result.url,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
         publicId: result.publicId || result.fileId,
+        fileId: result.fileId || result.publicId,
         provider: result.provider,
       },
     });

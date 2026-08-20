@@ -235,12 +235,16 @@ async function uploadDocument(input, options = {}) {
   const imagekit = getImageKit();
   if (imagekit) {
     try {
-      const result = await imagekit.upload({
+      const uploadParams = {
         file: parsed.base64Data, // base64 string (without data: prefix)
         fileName: originalName,
         folder,
         useUniqueFileName: true,
-      });
+      };
+
+      const result = imagekit.files?.upload
+        ? await imagekit.files.upload(uploadParams)
+        : await imagekit.upload(uploadParams);
 
       console.log(`[CloudUpload] Document uploaded to ImageKit: ${result.url}`);
       return {
@@ -313,7 +317,11 @@ async function deleteDocument(fileId) {
   const imagekit = getImageKit();
   if (imagekit) {
     try {
-      await imagekit.deleteFile(fileId);
+      if (imagekit.files?.delete) {
+        await imagekit.files.delete(fileId);
+      } else {
+        await imagekit.deleteFile(fileId);
+      }
       console.log(`[CloudUpload] Deleted from ImageKit: ${fileId}`);
       return true;
     } catch (err) {

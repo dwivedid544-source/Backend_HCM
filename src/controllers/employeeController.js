@@ -806,9 +806,14 @@ const submitBenefitClaim = async (req, res, next) => {
   try {
     const profile = await getOrCreateProfile(req.user.userId);
 
-    const { type, amount, date, description } = req.body;
+    const { type, amount, date, description, receiptUrl, receiptBase64, file } = req.body;
     if (!type || !amount) {
       return res.status(400).json({ success: false, error: { message: 'Type and amount are required' } });
+    }
+
+    let finalReceiptUrl = receiptUrl || null;
+    if (receiptBase64 || (file && typeof file === 'string' && file.startsWith('data:'))) {
+      finalReceiptUrl = await handleBase64Field(receiptBase64 || file, finalReceiptUrl, { folder: 'hcm/receipts', filenamePrefix: 'receipt' });
     }
 
     const settings = await prisma.globalSettings.findUnique({ where: { id: 'global-settings' } });
@@ -821,7 +826,8 @@ const submitBenefitClaim = async (req, res, next) => {
         action: 'Submitted',
         actor: profile.fullName,
         date: new Date().toISOString(),
-        comment: 'Claim submitted by employee'
+        comment: 'Claim submitted by employee',
+        receiptUrl: finalReceiptUrl
       }
     ];
 
@@ -829,7 +835,7 @@ const submitBenefitClaim = async (req, res, next) => {
       data: {
         employeeId: profile.id,
         title: type,
-        provider: description || 'General',
+        provider: finalReceiptUrl ? `${description || 'General'} [Receipt: ${finalReceiptUrl}]` : (description || 'General'),
         amount: parseFloat(amount) || 0,
         status: 'Pending', // Legacy status field kept for compatibility
         managerStatus,

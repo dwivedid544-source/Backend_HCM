@@ -8,6 +8,7 @@ const prisma = require('../config/prisma');
 const { z } = require('zod');
 const { sendEmail } = require('../utils/emailService');
 const { isWorkflowEnabled, processApproval } = require('../services/approval.service');
+const { handleBase64Field } = require('../services/cloudUploadService');
 
 // ─────────────────────────────────────────
 // JOB POSTS
@@ -1112,12 +1113,15 @@ const createTicket = async (req, res, next) => {
 // POST /api/hr/tickets/:id/reply
 const replyTicket = async (req, res, next) => {
   try {
-    const { text } = req.body;
-    const attachmentUrl = req.file ? `/uploads/${req.file.filename}` : null;
-    if (!text && !attachmentUrl) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Reply text or attachment is required.' } });
+    const { text, attachmentUrl, attachmentBase64 } = req.body;
+    let finalAttachmentUrl = attachmentUrl || (req.file ? `/uploads/${req.file.filename}` : null);
+    if (!finalAttachmentUrl && attachmentBase64) {
+      finalAttachmentUrl = await handleBase64Field(attachmentBase64, null, { folder: 'hcm/chat', filenamePrefix: 'chat' });
+    }
+    if (!text && !finalAttachmentUrl) return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Reply text or attachment is required.' } });
 
     const msg = await prisma.ticketMessage.create({
-      data: { ticketId: req.params.id, senderId: req.user.userId, text: text || '', attachmentUrl },
+      data: { ticketId: req.params.id, senderId: req.user.userId, text: text || '', attachmentUrl: finalAttachmentUrl },
     });
 
     return res.status(201).json({ success: true, data: msg });
