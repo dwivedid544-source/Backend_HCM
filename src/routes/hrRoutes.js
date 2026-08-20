@@ -106,7 +106,12 @@ router.post('/onboarding/:id/remind-manager', checkPermission('onboarding', 'edi
 router.post('/onboarding/send-welcome', checkPermission('onboarding', 'create'), sendWelcomeEmailAll);
 router.post('/onboarding/:id/promote', checkPermission('onboarding', 'approve'), promoteCandidate);
 
+const { aiCandidateSummary } = require('../controllers/aiController');
+
 // Reports
 router.get('/reports', checkPermission('reports', 'view'), getHRReports);
+
+// AI Features
+router.post('/ai/candidate-summary', aiCandidateSummary);
 
 module.exports = router;

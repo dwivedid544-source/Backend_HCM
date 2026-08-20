@@ -1470,9 +1470,127 @@ const generatePayroll = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// PUT /api/superadmin/organizations/:id/subscription
+const updateOrgSubscription = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { plan, pricingPlanId, maxEmployees, maxStorageGB, status } = req.body;
+
+    const org = await prisma.organization.findUnique({ where: { id } });
+    if (!org) {
+      return res.status(404).json({ success: false, error: { message: "Organization not found." } });
+    }
+
+    const data = {};
+    if (plan) data.plan = plan;
+    if (pricingPlanId) data.pricingPlanId = pricingPlanId;
+    if (maxEmployees !== undefined) data.maxEmployees = parseInt(maxEmployees, 10);
+    if (maxStorageGB !== undefined) data.maxStorageGB = parseInt(maxStorageGB, 10);
+    if (status) data.status = status;
+
+    if (data.maxEmployees) {
+      const activeEmployees = await prisma.employeeProfile.count({
+        where: { user: { organizationId: id, isActive: true } }
+      });
+      if (activeEmployees > data.maxEmployees) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'LIMIT_EXCEEDED',
+            message: `Cannot lower employee limit to ${data.maxEmployees} because organization currently has ${activeEmployees} active employees.`
+          }
+        });
+      }
+    }
+
+    const updatedOrg = await prisma.organization.update({
+      where: { id },
+      data,
+      include: { pricingPlan: true }
+    });
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user.userId,
+          action: 'UPDATE_ORG_SUBSCRIPTION',
+          details: `Updated subscription for ${org.name}: Plan=${updatedOrg.plan}, MaxEmployees=${updatedOrg.maxEmployees}`,
+          ipAddress: req.ip || req.socket.remoteAddress
+        }
+      });
+    } catch (aErr) {}
+
+    return res.status(200).json({
+      success: true,
+      data: updatedOrg,
+      message: `Subscription updated for ${org.name}`
+    });
+  } catch (err) { next(err); }
+};
+
+// GET /api/superadmin/settings
+const getSystemSettings = async (req, res, next) => {
+  try {
+    let settings = await prisma.globalSettings.findFirst();
+    if (!settings) {
+      settings = await prisma.globalSettings.create({
+        data: { id: "global-settings" }
+      });
+    }
+
+    const safeSettings = { ...settings };
+    if (safeSettings.smtpPassword) safeSettings.smtpPassword = '••••••••';
+    if (safeSettings.apiKey) safeSettings.apiKey = '••••••••';
+
+    return res.status(200).json({ success: true, data: safeSettings });
+  } catch (err) { next(err); }
+};
+
+// PUT /api/superadmin/settings
+const updateSystemSettings = async (req, res, next) => {
+  try {
+    const data = { ...req.body };
+    delete data.id;
+
+    if (data.smtpPassword === '••••••••') delete data.smtpPassword;
+    if (data.apiKey === '••••••••') delete data.apiKey;
+
+    const existing = await prisma.globalSettings.findFirst();
+    let updated;
+
+    if (existing) {
+      updated = await prisma.globalSettings.update({
+        where: { id: existing.id },
+        data
+      });
+    } else {
+      updated = await prisma.globalSettings.create({
+        data: { id: "global-settings", ...data }
+      });
+    }
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user.userId,
+          action: 'UPDATE_SYSTEM_SETTINGS',
+          details: `Updated platform global settings`,
+          ipAddress: req.ip || req.socket.remoteAddress
+        }
+      });
+    } catch (aErr) {}
+
+    const safeSettings = { ...updated };
+    if (safeSettings.smtpPassword) safeSettings.smtpPassword = '••••••••';
+    if (safeSettings.apiKey) safeSettings.apiKey = '••••••••';
+
+    return res.status(200).json({ success: true, data: safeSettings, message: 'Global system settings updated successfully.' });
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getPlatformStats,
-  getAllOrganizations, createOrganization, deleteOrganization,
+  getAllOrganizations, createOrganization, deleteOrganization, updateOrgSubscription,
   getAllPlatformUsers, createAdminForOrg,
   toggleAnyUserActive, changeAnyUserRole, revokeAnyUserRole,
   getPlatformAuditLogs,
@@ -1483,5 +1601,6 @@ module.exports = {
   getAllPlatformDepartments, createPlatformDepartment, updatePlatformDepartment, deletePlatformDepartment,
   getPayrollSettings, updatePayrollSettings,
   getPayrollHistory, createPayslip, updatePayslip, deletePayslip, bulkApprovePayslips, generatePayroll,
-  resetUserPassword
+  resetUserPassword,
+  getSystemSettings, updateSystemSettings
 };

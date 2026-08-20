@@ -134,8 +134,25 @@ const reviewLeave = async (req, res, next) => {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.errors[0].message } });
     }
 
-    const leave = await prisma.leaveRequest.findUnique({ where: { id: req.params.id } });
+    const leave = await prisma.leaveRequest.findUnique({ 
+      where: { id: req.params.id },
+      include: { user: { include: { employeeProfile: true } } }
+    });
     if (!leave) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Leave request not found.' } });
+
+    // Authorization check
+    if (!['ADMIN', 'SUPERADMIN', 'HR'].includes(req.user.role)) {
+      const managerProfile = await prisma.employeeProfile.findUnique({ where: { userId: req.user.userId } });
+      if (!managerProfile || leave.user.employeeProfile[0]?.managerId !== managerProfile.id) {
+        // Allow if it's via generic approval log assignment
+        const pendingApprovals = await prisma.approvalLog.findFirst({
+          where: { approverId: managerProfile.id, status: 'Pending', entityType: 'LeaveRequest', entityId: leave.id },
+        });
+        if (!pendingApprovals) {
+          return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to review this leave request.' } });
+        }
+      }
+    }
 
     if (leave.status !== 'PENDING' && leave.status !== 'MANAGER_APPROVED') {
       return res.status(400).json({ success: false, error: { code: 'ALREADY_REVIEWED', message: 'This leave has already been reviewed.' } });
@@ -219,6 +236,7 @@ const assignTask = async (req, res, next) => {
       description: z.string().optional(),
       priority: z.enum(['High', 'Medium', 'Low']).optional(),
       dueDate: z.string().optional(),
+      status: z.enum(['Pending', 'In Progress', 'Review', 'Completed']).optional(),
     });
 
     const parsed = schema.safeParse(req.body);
@@ -233,7 +251,7 @@ const assignTask = async (req, res, next) => {
         description: parsed.data.description,
         priority: parsed.data.priority || 'Medium',
         dueDate: parsed.data.dueDate ? new Date(parsed.data.dueDate) : null,
-        status: 'Pending',
+        status: parsed.data.status || 'Pending',
       },
     });
 
@@ -388,6 +406,32 @@ const addPerformanceGoal = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// PATCH /api/manager/performance/:id
+const updatePerformanceGoal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const schema = z.object({
+      progress: z.number().min(0).max(100).optional(),
+      priority: z.enum(['Low', 'Medium', 'High', 'Critical']).optional(),
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: parsed.error.errors[0].message } });
+    }
+
+    const goal = await prisma.performanceGoal.update({
+      where: { id },
+      data: {
+        progress: parsed.data.progress !== undefined ? parsed.data.progress : undefined,
+        priority: parsed.data.priority || undefined,
+      },
+    });
+
+    return res.status(200).json({ success: true, data: goal, message: 'Performance goal updated.' });
+  } catch (err) { next(err); }
+};
+
 // ─────────────────────────────────────────
 // 9. GET TEAM ATTENDANCE  →  GET /api/manager/attendance
 // ─────────────────────────────────────────
@@ -447,10 +491,17 @@ const addManualAttendance = async (req, res, next) => {
 
     const employee = await prisma.employeeProfile.findUnique({
       where: { id: employeeProfileId },
-      select: { userId: true, shiftId: true },
+      select: { userId: true, shiftId: true, managerId: true },
     });
     if (!employee) {
       return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Employee not found.' } });
+    }
+
+    if (!['ADMIN', 'SUPERADMIN', 'HR'].includes(req.user.role)) {
+      const managerProfile = await prisma.employeeProfile.findUnique({ where: { userId: req.user.userId } });
+      if (!managerProfile || employee.managerId !== managerProfile.id) {
+        return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'You are not authorized to modify attendance for this employee.' } });
+      }
     }
 
     // Parse time components
@@ -1280,101 +1331,151 @@ const reviewManagerReimbursement = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────
-// 14. GET MANAGER DASHBOARD METRICS  →  GET /api/manager/dashboard
+// 18. GET MANAGER DASHBOARD METRICS  →  GET /api/manager/dashboard
 // ─────────────────────────────────────────
 const getManagerDashboard = async (req, res, next) => {
   try {
-    const orgId = req.user.organizationId || (await prisma.organization.findFirst({ select: { id: true } }))?.id;
-    const managerUserId = req.user.userId;
-
-    // Find manager profile
     const managerProfile = await prisma.employeeProfile.findUnique({
-      where: { userId: managerUserId }
+      where: { userId: req.user.userId },
+      select: { id: true, fullName: true, department: { select: { name: true } } }
     });
 
-    let teamMembers = [];
-    if (managerProfile) {
-      teamMembers = await prisma.employeeProfile.findMany({
-        where: { managerId: managerProfile.id },
-        select: { id: true, fullName: true, department: true }
-      });
+    if (!managerProfile) {
+      return res.status(404).json({ success: false, error: { message: 'Manager profile not found.' } });
     }
 
-    const teamIds = teamMembers.map(m => m.id);
+    // Direct reports
+    const directReports = await prisma.employeeProfile.findMany({
+      where: { managerId: managerProfile.id },
+      select: {
+        id: true,
+        userId: true,
+        fullName: true,
+        employeeId: true,
+        avatarUrl: true,
+        department: { select: { name: true } }
+      }
+    });
 
-    // Today's attendance
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const teamSize = directReports.length;
+    const directUserIds = directReports.map(r => r.userId);
+    const directProfileIds = directReports.map(r => r.id);
 
-    let todayAttendance = [];
-    try {
-      todayAttendance = await prisma.attendanceLog.findMany({
-        where: {
-          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
-          date: { gte: today, lt: tomorrow }
-        }
-      });
-    } catch (e) {}
+    // Today's Date range
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-    const presentCount = todayAttendance.filter(a => a.status === 'Present' || a.clockIn).length;
-    const absentCount = Math.max(0, teamMembers.length - presentCount);
+    // Today's attendance logs for direct reports
+    const todayLogs = await prisma.attendanceLog.findMany({
+      where: {
+        userId: { in: directUserIds },
+        date: { gte: startOfDay, lte: endOfDay }
+      }
+    });
 
-    // Pending leaves
-    let pendingLeaves = [];
-    try {
-      pendingLeaves = await prisma.leaveRequest.findMany({
-        where: {
-          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
-          status: { in: ['Pending', 'PENDING'] }
-        },
-        include: { employee: { select: { fullName: true } } }
-      });
-    } catch (e) {}
+    const presentUserIds = new Set(todayLogs.filter(l => l.status === 'Present' || l.clockIn != null).map(l => l.userId));
+    const presentToday = presentUserIds.size;
+    const absentToday = Math.max(0, teamSize - presentToday);
 
-    // Pending Reimbursements
-    let pendingReimbursements = [];
-    try {
-      pendingReimbursements = await prisma.reimbursementClaim.findMany({
-        where: {
-          employeeId: { in: teamIds.length > 0 ? teamIds : ['none'] },
-          status: 'PENDING'
-        }
-      });
-    } catch (e) {}
+    // Pending Leave requests for direct reports
+    const pendingLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        userId: { in: directUserIds },
+        status: { in: ['PENDING', 'Pending'] }
+      },
+      include: {
+        user: { select: { employeeProfile: { select: { fullName: true, avatarUrl: true } } } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
 
-    // Active Tasks
-    let activeTasks = [];
-    try {
-      activeTasks = await prisma.task.findMany({
-        where: {
-          assignedToId: { in: teamIds.length > 0 ? teamIds : ['none'] },
-          status: { in: ['Pending', 'IN_PROGRESS', 'PENDING'] }
-        },
-        orderBy: { dueDate: 'asc' },
-        take: 5
-      });
-    } catch (e) {}
+    // Pending Reimbursements for direct reports
+    const pendingReimbursements = await prisma.benefitClaim.count({
+      where: {
+        employeeId: { in: directProfileIds },
+        overallStatus: { in: ['Submitted', 'Pending', 'Pending Manager Approval'] }
+      }
+    });
+
+    // Team Tasks summary
+    const tasks = await prisma.task.findMany({
+      where: { employeeId: { in: directProfileIds } },
+      orderBy: { dueDate: 'asc' }
+    });
+
+    const tasksSummary = {
+      total: tasks.length,
+      pending: tasks.filter(t => t.status === 'Pending').length,
+      inProgress: tasks.filter(t => t.status === 'In Progress').length,
+      completed: tasks.filter(t => t.status === 'Completed').length,
+    };
+
+    // Performance / Goals Alerts (progress < 30%)
+    const goals = await prisma.performanceGoal.findMany({
+      where: { employeeId: { in: directProfileIds } },
+      include: { employee: { select: { fullName: true } } }
+    });
+
+    const performanceAlerts = goals.filter(g => g.progress < 30).map(g => ({
+      id: g.id,
+      title: g.title,
+      employeeName: g.employee?.fullName || 'Team Member',
+      progress: g.progress,
+      deadline: g.deadline
+    }));
+
+    // Team Attendance Trends (Last 7 days)
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const weekLogs = await prisma.attendanceLog.findMany({
+      where: {
+        userId: { in: directUserIds },
+        date: { gte: sevenDaysAgo }
+      }
+    });
+
+    const trendMap = {};
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+      trendMap[dateStr] = { day: dayName, date: dateStr, present: 0, total: teamSize };
+    }
+
+    weekLogs.forEach(log => {
+      const dateStr = log.date ? new Date(log.date).toISOString().split('T')[0] : null;
+      if (dateStr && trendMap[dateStr] && (log.status === 'Present' || log.clockIn)) {
+        trendMap[dateStr].present += 1;
+      }
+    });
+
+    const teamAttendanceTrends = Object.values(trendMap);
 
     return res.status(200).json({
       success: true,
       data: {
+        manager: {
+          name: managerProfile.fullName,
+          department: managerProfile.department?.name || 'Operations'
+        },
         metrics: {
-          teamSize: teamMembers.length,
-          presentToday: presentCount,
-          absentToday: absentCount,
+          teamSize,
+          presentToday,
+          absentToday,
           pendingLeaveApprovals: pendingLeaves.length,
-          pendingReimbursements: pendingReimbursements.length,
-          activeTasksCount: activeTasks.length
+          pendingReimbursements
         },
         pendingLeaves,
-        activeTasks
+        tasksSummary,
+        upcomingTasks: tasks.filter(t => t.status !== 'Completed').slice(0, 5),
+        performanceAlerts,
+        teamAttendanceTrends
       }
     });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
 module.exports = {
@@ -1382,7 +1483,7 @@ module.exports = {
   getTeam, addTeamMember,
   getTeamLeaves, reviewLeave,
   assignTask, getTeamTasks, updateTask,
-  getTeamPerformance, addPerformanceGoal,
+  getTeamPerformance, addPerformanceGoal, updatePerformanceGoal,
   getTeamAttendance, addManualAttendance,
   getOrgEmployees,
   addTeamLeaveRequest,

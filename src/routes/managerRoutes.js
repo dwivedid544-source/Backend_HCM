@@ -11,7 +11,7 @@ const {
   getTeam, addTeamMember,
   getTeamLeaves, reviewLeave,
   assignTask, getTeamTasks, updateTask,
-  getTeamPerformance, addPerformanceGoal,
+  getTeamPerformance, addPerformanceGoal, updatePerformanceGoal,
   getTeamAttendance, addManualAttendance,
   getOrgEmployees, addTeamLeaveRequest,
   getTeamReviews, createTeamReview, updateTeamReview,
@@ -49,6 +49,7 @@ router.patch('/tasks/:id', checkPermission('tasks', 'edit'), updateTask);
 // KPI Tracking & Performance
 router.get('/performance', checkPermission('kpi_tracking', 'view'), getTeamPerformance);
 router.post('/performance', checkPermission('kpi_tracking', 'create'), addPerformanceGoal);
+router.patch('/performance/:id', checkPermission('kpi_tracking', 'edit'), updatePerformanceGoal);
 
 // Reviews
 router.get('/reviews', checkPermission('reviews', 'view'), getTeamReviews);

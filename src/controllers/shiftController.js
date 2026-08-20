@@ -22,10 +22,26 @@ const createShift = async (req, res) => {
   try {
     const { name, startTime, endTime, breakDurationMin, workingHoursMin, graceInMin, graceOutMin, isDefault } = req.body;
     
-    // If this is default, remove default from others
-    if (isDefault) {
+    const breakMin = parseInt(breakDurationMin) || 60;
+    const workMin = parseInt(workingHoursMin) || 480;
+
+    if (breakMin < 0) {
+      return res.status(400).json({ message: 'Break duration cannot be negative.' });
+    }
+
+    if (breakMin >= workMin) {
+      return res.status(400).json({ message: 'Break duration must be less than total working hours.' });
+    }
+
+    let organizationId = req.user?.organizationId;
+    if (!organizationId) {
+      const defaultOrg = await prisma.organization.findFirst({ select: { id: true } });
+      organizationId = defaultOrg?.id;
+    }
+
+    if (isDefault && organizationId) {
       await prisma.shift.updateMany({
-        where: { isDefault: true },
+        where: { isDefault: true, organizationId },
         data: { isDefault: false }
       });
     }
@@ -33,11 +49,12 @@ const createShift = async (req, res) => {
     const shift = await prisma.shift.create({
       data: {
         name, startTime, endTime, 
-        breakDurationMin: parseInt(breakDurationMin) || 60,
-        workingHoursMin: parseInt(workingHoursMin) || 480,
+        breakDurationMin: breakMin,
+        workingHoursMin: workMin,
         graceInMin: parseInt(graceInMin) || 15,
         graceOutMin: parseInt(graceOutMin) || 15,
-        isDefault: Boolean(isDefault)
+        isDefault: Boolean(isDefault),
+        ...(organizationId ? { organizationId } : {})
       }
     });
     res.status(201).json(shift);
