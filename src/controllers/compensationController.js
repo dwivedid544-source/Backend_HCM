@@ -245,10 +245,10 @@ exports.finalizePayrollSnapshot = async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.payrollSnapshot.findUnique({ where: { id } });
     if (!existing) {
-      return res.status(404).json({ message: "Payroll snapshot not found" });
+      return res.status(404).json({ success: false, error: { message: "Payroll snapshot not found" } });
     }
-    if (existing.status !== 'Draft') {
-      return res.status(400).json({ message: `Snapshot is already ${existing.status}` });
+    if (existing.status !== 'Draft' && existing.status !== 'Pending') {
+      return res.status(400).json({ success: false, error: { message: `Snapshot is already ${existing.status} and locked.` } });
     }
 
     const updated = await prisma.payrollSnapshot.update({
@@ -258,9 +258,21 @@ exports.finalizePayrollSnapshot = async (req, res) => {
         paymentDate: new Date()
       }
     });
-    res.json(updated);
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          userId: req.user.userId,
+          action: 'PAYROLL_FINALIZED',
+          details: `Payroll snapshot for employee ${existing.employeeId} (${existing.month}) finalized. Net Pay: $${existing.netSalary}`,
+          ipAddress: req.ip || req.socket.remoteAddress
+        }
+      });
+    } catch (aErr) {}
+
+    return res.status(200).json({ success: true, data: updated, message: 'Payroll finalized and locked successfully.' });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ success: false, error: { message: error.message } });
   }
 };
 

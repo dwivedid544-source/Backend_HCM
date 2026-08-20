@@ -7,10 +7,11 @@ const { protect, authorize } = require('../middlewares/authMiddleware');
 const { checkPermission } = require('../middlewares/permissionMiddleware');
 
 const {
+  getManagerDashboard,
   getTeam, addTeamMember,
   getTeamLeaves, reviewLeave,
   assignTask, getTeamTasks, updateTask,
-  getTeamPerformance, addPerformanceGoal,
+  getTeamPerformance, addPerformanceGoal, updatePerformanceGoal,
   getTeamAttendance, addManualAttendance,
   getOrgEmployees, addTeamLeaveRequest,
   getTeamReviews, createTeamReview, updateTeamReview,
@@ -27,6 +28,12 @@ router.use(protect, authorize('MANAGER', 'ADMIN', 'SUPERADMIN'));
 router.get('/team', checkPermission('team_members', 'view'), getTeam);
 router.post('/team', checkPermission('team_members', 'create'), addTeamMember);
 router.get('/org-employees', checkPermission('team_members', 'view'), getOrgEmployees);
+router.get('/dashboard', getManagerDashboard);
+router.get('/team', getTeam);
+router.post('/team', addTeamMember);
+router.get('/org-employees', getOrgEmployees);
+router.get('/attendance', getTeamAttendance);
+router.post('/attendance', addManualAttendance);
 
 // Attendance Review
 router.get('/attendance', checkPermission('attendance_review', 'view'), getTeamAttendance);
@@ -41,6 +48,9 @@ router.patch('/leaves/:id', checkPermission('leave_approval', 'approve'), review
 router.get('/tasks', checkPermission('tasks', 'view'), getTeamTasks);
 router.post('/tasks', checkPermission('tasks', 'create'), assignTask);
 router.patch('/tasks/:id', checkPermission('tasks', 'edit'), updateTask);
+router.get('/performance', getTeamPerformance);
+router.post('/performance', addPerformanceGoal);
+router.patch('/performance/:id', updatePerformanceGoal);
 
 // KPI Tracking & Performance
 router.get('/performance', checkPermission('kpi_tracking', 'view'), getTeamPerformance);

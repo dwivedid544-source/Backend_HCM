@@ -523,6 +523,10 @@ const createUser = async (req, res, next) => {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid organization role.' } });
     }
 
+    if (role === 'SUPERADMIN' && req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only SuperAdmin can assign SuperAdmin role.' } });
+    }
+
     const [existingEmail, existingEmpId] = await Promise.all([
       prisma.user.findUnique({ where: { email: data.email } }),
       prisma.employeeProfile.findUnique({ where: { employeeId: data.empId } }),
@@ -663,9 +667,17 @@ const changeUserRole = async (req, res, next) => {
       return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid organization role.' } });
     }
 
+    if (role === 'SUPERADMIN' && req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only SuperAdmin can assign SuperAdmin role.' } });
+    }
+
     const targetUser = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!targetUser || targetUser.role === 'SUPERADMIN') {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+    }
+
+    if (req.user?.organizationId && targetUser.organizationId && targetUser.organizationId !== req.user.organizationId && req.user.role !== 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Cannot modify user outside your organization.' } });
     }
 
     let validCustomRoleId = null;
@@ -804,6 +816,19 @@ const toggleUserActive = async (req, res, next) => {
       return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
     }
 
+    if (req.user?.userId === req.params.id) {
+      return res.status(400).json({ success: false, error: { code: 'SELF_DEACTIVATION_BLOCKED', message: 'You cannot deactivate your own active admin account.' } });
+    }
+
+    if (user.role === 'ADMIN' && user.isActive) {
+      const activeAdminCount = await prisma.user.count({
+        where: { organizationId: user.organizationId, role: 'ADMIN', isActive: true }
+      });
+      if (activeAdminCount <= 1) {
+        return res.status(400).json({ success: false, error: { code: 'LAST_ADMIN_PROTECTED', message: 'Cannot deactivate the sole active Admin account in the organization.' } });
+      }
+    }
+
     const updated = await prisma.user.update({
       where: { id: req.params.id },
       data: { isActive: !user.isActive, status: !user.isActive ? 'Active' : 'Inactive' },
@@ -837,8 +862,12 @@ const updateUser = async (req, res, next) => {
       include: { employeeProfile: true }
     });
     if (!existingUser) return res.status(404).json({ success: false, error: { message: 'User not found' } });
-    if (existingUser.role === 'SUPERADMIN') {
-      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Forbidden' } });
+    if (existingUser.role === 'SUPERADMIN' && req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Forbidden: Cannot edit a SuperAdmin' } });
+    }
+    
+    if (role && roleToEnum(role) === 'SUPERADMIN' && req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only SuperAdmin can assign SuperAdmin role.' } });
     }
 
     let finalDeptId = departmentId;
@@ -1327,12 +1356,77 @@ const markPayslipPaid = async (req, res, next) => {
 // GET /api/admin/audit-logs
 const getAuditLogs = async (req, res, next) => {
   try {
-    const logs = await prisma.auditLog.findMany({
-      include: { user: { select: { email: true, role: true } } },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const { search, action, userId, startDate, endDate } = req.query;
+
+    const where = {};
+
+    let organizationId = req.user?.organizationId;
+    if (!organizationId) {
+      const defaultOrg = await prisma.organization.findFirst({ select: { id: true } });
+      organizationId = defaultOrg?.id;
+    }
+
+    if (organizationId) {
+      where.user = { organizationId };
+    }
+
+    if (search) {
+      where.OR = [
+        { action: { contains: search, mode: 'insensitive' } },
+        { details: { contains: search, mode: 'insensitive' } },
+        { ipAddress: { contains: search, mode: 'insensitive' } },
+        { user: { email: { contains: search, mode: 'insensitive' } } }
+      ];
+    }
+
+    if (action && action !== 'All') {
+      where.action = { contains: action, mode: 'insensitive' };
+    }
+
+    if (userId) {
+      where.userId = userId;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(endDate);
+    }
+
+    const [logs, total] = await Promise.all([
+      prisma.auditLog.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              role: true,
+              employeeProfile: { select: { fullName: true } }
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.auditLog.count({ where })
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: logs,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1
+      }
     });
-    return res.status(200).json({ success: true, data: logs });
   } catch (err) { next(err); }
 };
 

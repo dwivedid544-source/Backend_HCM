@@ -10,7 +10,7 @@ const {
   getProfile, updateProfile,
   clockIn, clockOut, getAttendance,
   getLeaves, applyLeave, cancelLeave,
-  getPayslips, getPerformance, updateGoalProgress, upsertSkill, deleteSkill,
+  getPayslips, getPerformance, createGoal, updateGoalProgress, deleteGoal, upsertSkill, deleteSkill,
   getTickets, createTicket, replyTicket, deleteTicketMessage,
   getBenefits, submitBenefitClaim, enrollBenefitPlan, unenrollBenefitPlan, getTasks,
   getDocuments, uploadDocument, deleteDocument,
@@ -52,6 +52,19 @@ router.get('/compensation', checkPermission('payroll', 'view'), (req, res, next)
 });
 router.post('/compensation/increment', checkPermission('payroll', 'create'), requestIncrement);
 router.get('/payroll/snapshots', checkPermission('payroll', 'view'), getPayrollSnapshots);
+router.post('/compensation/increment', requestIncrement);
+router.get('/payroll/snapshots', getPayrollSnapshots);
+router.get('/performance', getPerformance);
+router.post('/performance/goals', createGoal);
+router.post('/performance/goals/:id/progress', updateGoalProgress);
+router.delete('/performance/goals/:id', deleteGoal);
+router.post('/performance/skills', upsertSkill);
+router.delete('/performance/skills/:id', deleteSkill);
+router.get('/benefits', getBenefits);
+router.post('/benefits/claims', submitBenefitClaim);
+router.post('/benefits/enroll', enrollBenefitPlan);
+router.post('/benefits/unenroll', unenrollBenefitPlan);
+router.get('/tasks', getTasks);
 
 // Performance
 router.get('/performance', checkPermission('performance', 'view'), getPerformance);

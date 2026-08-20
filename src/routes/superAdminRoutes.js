@@ -10,7 +10,7 @@ const { protect, authorize } = require('../middlewares/authMiddleware');
 
 const {
   getPlatformStats,
-  getAllOrganizations, createOrganization, deleteOrganization,
+  getAllOrganizations, createOrganization, deleteOrganization, updateOrgSubscription,
   getAllPlatformUsers, createAdminForOrg,
   toggleAnyUserActive, changeAnyUserRole, revokeAnyUserRole,
   getPlatformAuditLogs,
@@ -20,7 +20,8 @@ const {
   createUser, updateUser, deleteUser,
   getAllPlatformDepartments, createPlatformDepartment, updatePlatformDepartment, deletePlatformDepartment,
   getPayrollHistory, getPayrollSettings, updatePayrollSettings,
-  createPayslip, updatePayslip, deletePayslip, bulkApprovePayslips, generatePayroll, resetUserPassword
+  createPayslip, updatePayslip, deletePayslip, bulkApprovePayslips, generatePayroll, resetUserPassword,
+  getSystemSettings, updateSystemSettings
 } = require('../controllers/superAdminController');
 
 // 🔒 STRICT: Sirf SUPERADMIN
@@ -32,9 +33,14 @@ router.get('/system-health', getSystemHealth);      // GET  /api/superadmin/syst
 router.get('/analytics', getAnalytics);         // GET  /api/superadmin/analytics
 router.get('/analytics/export', getAnalyticsExport); // GET /api/superadmin/analytics/export
 
+// Settings & Config
+router.get('/settings', getSystemSettings);
+router.put('/settings', updateSystemSettings);
+
 // Organizations (multi-tenant management)
 router.get('/organizations', getAllOrganizations);   // GET  /api/superadmin/organizations
 router.post('/organizations', createOrganization);   // POST /api/superadmin/organizations
+router.put('/organizations/:id/subscription', updateOrgSubscription); // PUT /api/superadmin/organizations/:id/subscription
 router.delete('/organizations/:id', deleteOrganization);   // DEL  /api/superadmin/organizations/:id
 router.post('/organizations/:orgId/create-admin', createAdminForOrg); // POST /api/superadmin/organizations/:orgId/create-admin
 
