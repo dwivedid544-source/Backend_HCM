@@ -118,6 +118,21 @@ app.use('/api/upload', uploadRoutes);        // Cloud file uploads (Cloudinary/I
 app.use(errorHandler);
 
 // ---- SERVER START ----
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ HCM Backend Server running on http://localhost:${PORT}`);
 });
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Error: Port ${PORT} is already in use by another running process.`);
+    console.error(`👉 Please terminate the other process running on port ${PORT} or configure a different PORT in .env.`);
+  } else {
+    console.error('❌ Server startup error:', err);
+  }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Promise Rejection:', reason);
+});
+

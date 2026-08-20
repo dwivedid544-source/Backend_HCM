@@ -8,9 +8,13 @@ const approvalService = require('../services/approval.service');
 
 const getWorkflows = async (req, res, next) => {
   try {
-    const orgId = req.user.organizationId;
+    let orgId = req.user.organizationId;
+    if (!orgId) {
+      const firstOrg = await prisma.organization.findFirst();
+      if (firstOrg) orgId = firstOrg.id;
+    }
     const workflows = await prisma.approvalWorkflow.findMany({
-      where: { organizationId: orgId },
+      where: orgId ? { organizationId: orgId } : {},
       include: { steps: { orderBy: { sequence: 'asc' } } },
       orderBy: { createdAt: 'desc' }
     });
@@ -20,10 +24,19 @@ const getWorkflows = async (req, res, next) => {
 
 const getWorkflowByModule = async (req, res, next) => {
   try {
-    const orgId = req.user.organizationId;
+    let orgId = req.user.organizationId;
+    if (!orgId) {
+      const firstOrg = await prisma.organization.findFirst();
+      if (firstOrg) orgId = firstOrg.id;
+    }
     const { module } = req.params;
     const workflow = await prisma.approvalWorkflow.findFirst({
-      where: { organizationId: orgId, module, isActive: true, status: 'Active' },
+      where: { 
+        ...(orgId ? { organizationId: orgId } : {}), 
+        module, 
+        isActive: true, 
+        status: 'Active' 
+      },
       include: { steps: { orderBy: { sequence: 'asc' } } }
     });
     
@@ -36,7 +49,16 @@ const getWorkflowByModule = async (req, res, next) => {
 
 const createWorkflow = async (req, res, next) => {
   try {
-    const orgId = req.user.organizationId;
+    let orgId = req.user.organizationId;
+    if (!orgId) {
+      const firstOrg = await prisma.organization.findFirst();
+      if (firstOrg) orgId = firstOrg.id;
+    }
+
+    if (!orgId) {
+      return res.status(400).json({ success: false, error: { message: 'Organization ID could not be identified.' } });
+    }
+
     const { name, module, description, steps } = req.body;
 
     await validateWorkflow({ module, steps });
@@ -66,13 +88,13 @@ const createWorkflow = async (req, res, next) => {
         isActive: true,
         effectiveDate: new Date(),
         steps: {
-          create: steps.map(s => ({
-            stepOrder: s.sequence,
-            sequence: s.sequence,
-            approverType: s.approverType,
-            approverRole: s.approverRole,
-            canSkip: s.canSkip || false,
-            isRequired: s.isRequired !== undefined ? s.isRequired : true
+          create: steps.map((s, idx) => ({
+            stepOrder: s.sequence !== undefined ? parseInt(s.sequence, 10) : (idx + 1),
+            sequence: s.sequence !== undefined ? parseInt(s.sequence, 10) : (idx + 1),
+            approverType: s.approverType || 'ROLE',
+            approverRole: s.approverRole || 'MANAGER',
+            canSkip: Boolean(s.canSkip),
+            isRequired: s.isRequired !== undefined ? Boolean(s.isRequired) : true
           }))
         }
       },
@@ -88,8 +110,11 @@ const createWorkflow = async (req, res, next) => {
 
 const updateWorkflow = async (req, res, next) => {
   try {
-    // When updating, we actually create a new version to preserve history
-    const orgId = req.user.organizationId;
+    let orgId = req.user.organizationId;
+    if (!orgId) {
+      const firstOrg = await prisma.organization.findFirst();
+      if (firstOrg) orgId = firstOrg.id;
+    }
     const { id } = req.params;
     const { name, module, description, steps } = req.body;
 
@@ -108,7 +133,7 @@ const updateWorkflow = async (req, res, next) => {
 
     const newWorkflow = await prisma.approvalWorkflow.create({
       data: {
-        organizationId: orgId,
+        organizationId: orgId || existing.organizationId,
         name,
         module,
         description,
@@ -117,13 +142,13 @@ const updateWorkflow = async (req, res, next) => {
         isActive: true,
         effectiveDate: new Date(),
         steps: {
-          create: steps.map(s => ({
-            stepOrder: s.sequence,
-            sequence: s.sequence,
-            approverType: s.approverType,
-            approverRole: s.approverRole,
-            canSkip: s.canSkip || false,
-            isRequired: s.isRequired !== undefined ? s.isRequired : true
+          create: steps.map((s, idx) => ({
+            stepOrder: s.sequence !== undefined ? parseInt(s.sequence, 10) : (idx + 1),
+            sequence: s.sequence !== undefined ? parseInt(s.sequence, 10) : (idx + 1),
+            approverType: s.approverType || 'ROLE',
+            approverRole: s.approverRole || 'MANAGER',
+            canSkip: Boolean(s.canSkip),
+            isRequired: s.isRequired !== undefined ? Boolean(s.isRequired) : true
           }))
         }
       },
