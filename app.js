@@ -66,28 +66,14 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Serve uploaded static files
+// Serve uploaded static files & ensure uploads directory exists
 const path = require('path');
-app.use((err, req, res, next) => {
-  const fs = require('fs');
-  fs.appendFileSync('error.log', `[${new Date().toISOString()}] ${req.method} ${req.url} - ${err.stack}\n`);
-  
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, error: { code: 'FILE_TOO_LARGE', message: 'File is too large' } });
-    }
-  }
-
-  const statusCode = err.statusCode || 500;
-  res.status(statusCode).json({
-    success: false,
-    error: {
-      code: err.code || 'INTERNAL_ERROR',
-      message: err.message || 'Internal Server Error'
-    }
-  });
-});
-app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+const fs = require('fs');
+const uploadsDir = path.join(__dirname, 'public/uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // ---- HEALTH CHECK ----
 app.get('/', (req, res) => {

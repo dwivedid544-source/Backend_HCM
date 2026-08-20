@@ -377,16 +377,18 @@ const resetForgottenPassword = async (req, res, next) => {
       data: { passwordHash: newPasswordHash }
     });
 
-    await prisma.auditLog.create({
-      data: {
-        userId: user.id,
-        action: 'PASSWORD_RESET_FORGOT',
-        details: 'User reset their password via Forgot Password flow',
-        ipAddress: req.ip || 'Unknown',
-        device: req.headers['user-agent'] || 'Unknown',
-        level: 'Warning'
-      }
-    });
+    try {
+      await prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'PASSWORD_RESET_FORGOT',
+          details: `User reset their password via Forgot Password flow (${req.headers['user-agent'] || 'Unknown'})`,
+          ipAddress: req.ip || req.socket?.remoteAddress || 'Unknown'
+        }
+      });
+    } catch (auditErr) {
+      console.error("Audit log creation error during password reset:", auditErr);
+    }
 
     return res.status(200).json({ success: true, message: 'Password reset successfully.' });
   } catch (err) {

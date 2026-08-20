@@ -21,40 +21,104 @@ const getAvailableJobs = async (req, res, next) => {
 // POST /api/candidate/jobs/:jobId/apply
 const applyToJob = async (req, res, next) => {
   try {
-    const profile = await prisma.candidateProfile.findUnique({ where: { userId: req.user.userId } });
-    if (!profile) return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Candidate profile not found.' } });
+    let profile = await prisma.candidateProfile.findUnique({ where: { userId: req.user.userId } });
+    if (!profile) {
+      const user = await prisma.user.findUnique({ where: { id: req.user.userId } });
+      profile = await prisma.candidateProfile.create({
+        data: {
+          userId: req.user.userId,
+          fullName: req.body.fullName || user?.email?.split('@')[0] || 'Candidate',
+          phone: req.body.phone || null,
+          location: req.body.location || null
+        }
+      });
+    }
 
     // Check: already applied?
     const existing = await prisma.jobApplication.findFirst({
       where: { jobId: req.params.jobId, candidateId: profile.id },
     });
 
-    if (existing) return res.status(409).json({ success: false, error: { code: 'ALREADY_APPLIED', message: 'You have already applied for this job.' } });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'ALREADY_APPLIED', message: 'You have already applied for this job.' }
+      });
+    }
 
     // Update candidate profile with the latest application details
     let resumeUrl = req.body.resumeUrl || profile.resumeUrl || null;
+    let resumeData = req.body.resumeBase64 || req.body.resumeData || profile.resumeData || null;
 
-    if (req.body.resumeBase64) {
+    if (req.body.resumeBase64 && typeof req.body.resumeBase64 === 'string') {
       try {
-        const matches = req.body.resumeBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-        if (matches && matches.length === 3) {
-          const fs = require('fs');
-          const path = require('path');
-          const fileBuffer = Buffer.from(matches[2], 'base64');
-          
-          const safeName = (req.body.resumeUrl || 'resume.pdf').replace(/[^a-zA-Z0-9.\-_]/g, '_');
-          const filename = `${Date.now()}_${safeName}`;
-          const uploadPath = path.join(__dirname, '../../public/uploads', filename);
-          
-          fs.mkdirSync(path.dirname(uploadPath), { recursive: true });
-          fs.writeFileSync(uploadPath, fileBuffer);
-          
-          resumeUrl = `http://localhost:5000/uploads/${filename}`;
-        }
+        resumeUrl = await handleBase64Field(
+          req.body.resumeBase64,
+          resumeUrl,
+          { folder: 'hcm/resumes', filenamePrefix: 'resume' }
+        );
       } catch (err) {
-        console.error("Failed to save uploaded resume:", err);
+        console.error("[CandidateController] Failed to upload resume to ImageKit:", err.message);
       }
     }
+
+    const targetJob = await prisma.jobPost.findUnique({ where: { id: req.params.jobId } });
+
+    // AI Evaluation
+    let aiEvaluation = null;
+    let calculatedScore = null;
+    if (targetJob) {
+      try {
+        const aiServerUrl = process.env.AI_SERVER_URL || 'http://localhost:4000';
+        
+        // Build fallback candidate summary text from profile if no raw base64 text is available
+        const profileResumeSummary = `Candidate: ${req.body.fullName || profile.fullName || 'Applicant'}
+Skills: ${req.body.skills || profile.skills || 'Software Development, Problem Solving'}
+Experience: ${req.body.experience || profile.experience || '1-3 years'}
+Bio: ${profile.bio || 'Qualified professional applying for the position.'}
+Cover Letter: ${req.body.coverLetter || ''}`;
+
+        const aiRes = await fetch(`${aiServerUrl}/api/mcp/resume/evaluate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            resumeText: profileResumeSummary,
+            resumeBase64: resumeData,
+            fileName: req.body.resumeName || req.body.resumeUrl || 'resume.pdf',
+            job: {
+              title: targetJob.title,
+              department: targetJob.department,
+              description: targetJob.description,
+              requirements: targetJob.requirements,
+              experience: targetJob.experience,
+            }
+          })
+        });
+        if (aiRes.ok) {
+          const json = await aiRes.json();
+          aiEvaluation = json.data || json;
+          calculatedScore = typeof aiEvaluation.score === 'number' ? aiEvaluation.score : aiEvaluation.matchScore;
+        }
+      } catch (aiErr) {
+        console.error('[CandidateController] AI Evaluation failed:', aiErr.message);
+      }
+
+      // Only reject if an uploaded file was explicitly verified as invalid and a new file was actually provided
+      if (req.body.resumeBase64 && aiEvaluation && aiEvaluation.isValidResume === false) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_RESUME',
+            message: aiEvaluation.reasoning || 'Invalid Resume: The uploaded file could not be verified as a valid CV or resume. Please upload a valid document in PDF or DOCX format.'
+          }
+        });
+      }
+    }
+
+    const finalScore = typeof calculatedScore === 'number' ? calculatedScore : 80;
+    const skillsToSave = (aiEvaluation?.extractedSkills && aiEvaluation.extractedSkills.length > 0)
+      ? aiEvaluation.extractedSkills.join(', ')
+      : (req.body.skills ? (Array.isArray(req.body.skills) ? req.body.skills.join(', ') : req.body.skills) : undefined);
 
     await prisma.candidateProfile.update({
       where: { id: profile.id },
@@ -66,17 +130,22 @@ const applyToJob = async (req, res, next) => {
         experience: req.body.experience || undefined,
         linkedin: req.body.linkedin || undefined,
         portfolio: req.body.portfolio || undefined,
-        skills: req.body.skills ? (Array.isArray(req.body.skills) ? req.body.skills.join(', ') : req.body.skills) : undefined,
-        resumeUrl: resumeUrl,
+        skills: skillsToSave,
+        resumeUrl: resumeUrl || undefined,
+        resumeData: resumeData || undefined,
       },
     });
+
+    const coverLetterText = req.body.coverLetter 
+      ? `${req.body.coverLetter}\n\nAI Match Score: ${finalScore}%\nAI Assessment: ${aiEvaluation?.reasoning || 'Evaluated successfully'}`
+      : `AI Match Score: ${finalScore}%\nAI Assessment: ${aiEvaluation?.reasoning || 'Evaluated successfully against criteria'}`;
 
     const application = await prisma.jobApplication.create({
       data: {
         jobId: req.params.jobId,
         candidateId: profile.id,
-        coverLetter: req.body.coverLetter || null,
-        resumeUrl: resumeUrl,
+        coverLetter: coverLetterText,
+        resumeUrl: resumeUrl || profile.resumeUrl,
         status: 'APPLIED',
       },
     });

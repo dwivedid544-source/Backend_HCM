@@ -852,6 +852,18 @@ const deleteUser = async (req, res, next) => {
       if (existing.employeeProfile) {
         const empId = existing.employeeProfile.id;
 
+        // Collect all entity IDs associated with this employee
+        const userLeaveIds = (await tx.leaveRequest.findMany({ where: { userId }, select: { id: true } })).map(l => l.id);
+        const userIncrementIds = (await tx.salaryIncrementRequest.findMany({ where: { employeeId: empId }, select: { id: true } })).map(i => i.id);
+        const userExitIds = (await tx.exitLifecycle.findMany({ where: { employeeId: empId }, select: { id: true } })).map(e => e.id);
+        const allEntityIds = [...userLeaveIds, ...userIncrementIds, ...userExitIds];
+
+        if (allEntityIds.length > 0) {
+          await tx.approvalLog.deleteMany({
+            where: { entityId: { in: allEntityIds } }
+          });
+        }
+
         // Unassign direct reports where this employee is the manager
         await tx.employeeProfile.updateMany({
           where: { managerId: empId },

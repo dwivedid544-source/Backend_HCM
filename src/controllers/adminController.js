@@ -993,6 +993,18 @@ const deleteUser = async (req, res, next) => {
       if (existing.employeeProfile) {
         const empId = existing.employeeProfile.id;
 
+        // Collect all entity IDs associated with this employee
+        const userLeaveIds = (await tx.leaveRequest.findMany({ where: { userId }, select: { id: true } })).map(l => l.id);
+        const userIncrementIds = (await tx.salaryIncrementRequest.findMany({ where: { employeeId: empId }, select: { id: true } })).map(i => i.id);
+        const userExitIds = (await tx.exitLifecycle.findMany({ where: { employeeId: empId }, select: { id: true } })).map(e => e.id);
+        const allEntityIds = [...userLeaveIds, ...userIncrementIds, ...userExitIds];
+
+        if (allEntityIds.length > 0) {
+          await tx.approvalLog.deleteMany({
+            where: { entityId: { in: allEntityIds } }
+          });
+        }
+
         // Unassign direct reports where this employee is the manager
         await tx.employeeProfile.updateMany({
           where: { managerId: empId },
@@ -1448,6 +1460,16 @@ const getPolicies = async (req, res, next) => {
 const createPolicy = async (req, res, next) => {
   try {
     const { name, category, department, owner, effectiveDate, expiryDate, version, requiresSignature, status, description, pdfName, pdfData, acknowledgments } = req.body;
+    
+    let finalPdfData = pdfData;
+    if (pdfData && typeof pdfData === 'string' && pdfData.includes('base64,')) {
+      finalPdfData = await handleBase64Field(
+        pdfData,
+        null,
+        { folder: 'hcm/policies', filenamePrefix: 'policy' }
+      );
+    }
+
     const policy = await prisma.policy.create({
       data: {
         name,
@@ -1461,7 +1483,7 @@ const createPolicy = async (req, res, next) => {
         ...(status && { status }),
         ...(description && { description }),
         ...(pdfName && { pdfName }),
-        ...(pdfData && { pdfData }),
+        ...(finalPdfData && { pdfData: finalPdfData }),
         ...(acknowledgments && { acknowledgments }),
       },
     });
@@ -1474,6 +1496,17 @@ const updatePolicy = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, category, department, owner, effectiveDate, expiryDate, version, requiresSignature, status, description, pdfName, pdfData, acknowledgments } = req.body;
+    
+    let finalPdfData = pdfData;
+    if (pdfData && typeof pdfData === 'string' && pdfData.includes('base64,')) {
+      const existing = await prisma.policy.findUnique({ where: { id } });
+      finalPdfData = await handleBase64Field(
+        pdfData,
+        existing?.pdfData,
+        { folder: 'hcm/policies', filenamePrefix: 'policy' }
+      );
+    }
+
     const policy = await prisma.policy.update({
       where: { id },
       data: {
@@ -1486,9 +1519,9 @@ const updatePolicy = async (req, res, next) => {
         ...(version && { version }),
         ...(requiresSignature !== undefined && { requiresSignature }),
         ...(status && { status }),
-        ...(description !== undefined && { description }),
-        ...(pdfName !== undefined && { pdfName }),
-        ...(pdfData !== undefined && { pdfData }),
+        ...(description && { description }),
+        ...(pdfName && { pdfName }),
+        ...(finalPdfData && { pdfData: finalPdfData }),
         ...(acknowledgments && { acknowledgments }),
       },
     });

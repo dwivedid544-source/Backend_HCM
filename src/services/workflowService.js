@@ -204,7 +204,65 @@ const handleTransition = async (event, data, tx = prisma) => {
         }
       });
 
-      // 2. Create or Update EmployeeProfile
+      // 2. Safely resolve Department & Manager to avoid Foreign Key violations
+      let resolvedDepartmentId = null;
+      if (departmentId) {
+        const deptById = await tx.department.findUnique({ where: { id: departmentId } }).catch(() => null);
+        if (deptById) {
+          resolvedDepartmentId = deptById.id;
+        } else {
+          const deptByName = await tx.department.findFirst({
+            where: { name: { equals: departmentId } }
+          }).catch(() => null);
+          if (deptByName) {
+            resolvedDepartmentId = deptByName.id;
+          }
+        }
+      }
+      
+      if (!resolvedDepartmentId && onboarding.department) {
+        const deptByOnboarding = await tx.department.findFirst({
+          where: { name: { equals: onboarding.department } }
+        }).catch(() => null);
+        if (deptByOnboarding) {
+          resolvedDepartmentId = deptByOnboarding.id;
+        }
+      }
+
+      if (!resolvedDepartmentId) {
+        const anyDept = await tx.department.findFirst({ select: { id: true } }).catch(() => null);
+        if (anyDept) {
+          resolvedDepartmentId = anyDept.id;
+        } else if (orgId) {
+          const newDept = await tx.department.create({
+            data: {
+              name: onboarding.department || 'General',
+              organizationId: orgId
+            }
+          }).catch(() => null);
+          if (newDept) resolvedDepartmentId = newDept.id;
+        }
+      }
+
+      let resolvedManagerId = null;
+      if (managerId) {
+        const mgrById = await tx.employeeProfile.findUnique({ where: { id: managerId } }).catch(() => null);
+        if (mgrById) {
+          resolvedManagerId = mgrById.id;
+        } else {
+          const mgrByName = await tx.employeeProfile.findFirst({
+            where: {
+              OR: [
+                { fullName: { contains: managerId } },
+                { employeeId: { equals: managerId } }
+              ]
+            }
+          }).catch(() => null);
+          if (mgrByName) resolvedManagerId = mgrByName.id;
+        }
+      }
+
+      // Create or Update EmployeeProfile
       const candidateProfile = onboarding.application?.candidate;
       const existingEmp = await tx.employeeProfile.findUnique({ where: { userId: candidateUser.id } });
 
@@ -214,8 +272,8 @@ const handleTransition = async (event, data, tx = prisma) => {
         phone: onboarding.phone || candidateProfile?.phone || null,
         joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
         avatarUrl: onboarding.avatar || candidateProfile?.avatarUrl || null,
-        departmentId: departmentId || null,
-        managerId: managerId || null,
+        departmentId: resolvedDepartmentId || null,
+        managerId: resolvedManagerId || null,
         employmentType: 'Full-time',
         lifecycleStatus: 'ACTIVE',
         probationStatus: 'UNDER_PROBATION',

@@ -103,6 +103,34 @@ const getApplications = async (req, res, next) => {
       orderBy: { submittedAt: 'desc' },
     });
 
+    // Auto-advance applications if interviews are completed or offer is accepted
+    const acceptedOffers = await prisma.offer.findMany({
+      where: { status: 'Accepted' }
+    });
+
+    for (const app of applications) {
+      const candName = app.candidate?.fullName || app.candidate?.user?.email;
+      const hasAcceptedOffer = acceptedOffers.some(o => o.applicationId === app.id || (candName && o.candidate && candName.toLowerCase().includes(o.candidate.toLowerCase())));
+
+      if (hasAcceptedOffer && app.status !== 'HIRED') {
+        await prisma.jobApplication.update({
+          where: { id: app.id },
+          data: { status: 'HIRED' }
+        }).catch(() => {});
+        app.status = 'HIRED';
+      } else if (app.status === 'INTERVIEWING' && app.interviews && app.interviews.length > 0) {
+        const hasCompleted = app.interviews.some(i => i.status === 'Completed' || i.status === 'COMPLETED');
+        const hasPending = app.interviews.some(i => i.status === 'Scheduled' || i.status === 'SCHEDULED');
+        if (hasCompleted && !hasPending) {
+          await prisma.jobApplication.update({
+            where: { id: app.id },
+            data: { status: 'OFFERED' }
+          }).catch(() => {});
+          app.status = 'OFFERED';
+        }
+      }
+    }
+
     return res.status(200).json({ success: true, data: applications });
   } catch (err) { next(err); }
 };
@@ -311,6 +339,44 @@ const getInterviews = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const resolveDateTime = (date, time, existingDateTime) => {
+  let datePart = date;
+  let timePart = time || '10:00';
+  
+  if (!datePart && existingDateTime) {
+    const existingD = new Date(existingDateTime);
+    if (!isNaN(existingD.getTime())) {
+      datePart = `${existingD.getFullYear()}-${String(existingD.getMonth() + 1).padStart(2, '0')}-${String(existingD.getDate()).padStart(2, '0')}`;
+    }
+  }
+
+  if (datePart) {
+    const dateStr = String(datePart).trim();
+    // Check for DD/MM/YYYY or DD-MM-YYYY
+    const dmy = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+    if (dmy) {
+      datePart = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+    } else {
+      const ymd = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if (ymd) {
+        datePart = `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+      }
+    }
+    
+    // Check timePart format (HH:MM or HH:MM:SS)
+    const timeMatch = String(timePart).match(/^(\d{1,2}):(\d{2})/);
+    if (timeMatch) {
+      timePart = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}:00`;
+    }
+    
+    const parsed = new Date(`${datePart}T${timePart}`);
+    if (!isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
 // POST /api/hr/interviews
 // Accepts either structured IDs OR friendly fields (candidateName, role, date, time)
 const scheduleInterview = async (req, res, next) => {
@@ -321,10 +387,9 @@ const scheduleInterview = async (req, res, next) => {
     let resolvedInterviewerId = interviewerId;
     let resolvedDateTime = dateTime ? new Date(dateTime) : null;
 
-    // Build dateTime from separate date + time if not provided as ISO
-    if (!resolvedDateTime && date) {
-      const timePart = time || '10:00';
-      resolvedDateTime = new Date(`${date}T${timePart}:00`);
+    // Build dateTime from separate date + time
+    if (!resolvedDateTime && (date || time)) {
+      resolvedDateTime = resolveDateTime(date, time, null);
     }
     if (!resolvedDateTime) {
       resolvedDateTime = new Date();
@@ -451,11 +516,17 @@ const updateInterview = async (req, res, next) => {
   try {
     const { dateTime, date, time, meetingLink, round, type, status, interviewerId, candidate } = req.body;
 
+    const existing = await prisma.interview.findUnique({ where: { id: req.params.id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Interview not found' } });
+    }
+
     const updateData = {};
-    if (dateTime) updateData.dateTime = new Date(dateTime);
-    else if (date) {
-      const timePart = time || '10:00';
-      updateData.dateTime = new Date(`${date}T${timePart}:00`);
+    if (dateTime) {
+      updateData.dateTime = new Date(dateTime);
+    } else if (date || time) {
+      const resolved = resolveDateTime(date, time, existing.dateTime);
+      if (resolved) updateData.dateTime = resolved;
     }
     if (meetingLink !== undefined) updateData.meetingLink = meetingLink;
     if (round) updateData.round = round;
@@ -476,6 +547,21 @@ const updateInterview = async (req, res, next) => {
         interviewer: { select: { fullName: true, employeeId: true } },
       },
     });
+
+    if (updated.applicationId) {
+      const allAppInterviews = await prisma.interview.findMany({
+        where: { applicationId: updated.applicationId }
+      });
+      const hasCompleted = allAppInterviews.some(i => i.status === 'Completed' || i.status === 'COMPLETED');
+      const hasPending = allAppInterviews.some(i => i.status === 'Scheduled' || i.status === 'SCHEDULED');
+      
+      if (hasCompleted && !hasPending) {
+        await prisma.jobApplication.update({
+          where: { id: updated.applicationId },
+          data: { status: 'OFFERED' }
+        }).catch(() => {});
+      }
+    }
 
     return res.status(200).json({ success: true, data: updated, message: 'Interview updated.' });
   } catch (err) { next(err); }
@@ -499,6 +585,21 @@ const updateInterviewStatus = async (req, res, next) => {
       where: { id: req.params.id },
       data: { status },
     });
+
+    if (updated.applicationId) {
+      const allAppInterviews = await prisma.interview.findMany({
+        where: { applicationId: updated.applicationId }
+      });
+      const hasCompleted = allAppInterviews.some(i => i.status === 'Completed' || i.status === 'COMPLETED');
+      const hasPending = allAppInterviews.some(i => i.status === 'Scheduled' || i.status === 'SCHEDULED');
+      
+      if (hasCompleted && !hasPending) {
+        await prisma.jobApplication.update({
+          where: { id: updated.applicationId },
+          data: { status: 'OFFERED' }
+        }).catch(() => {});
+      }
+    }
 
     return res.status(200).json({ success: true, data: updated, message: 'Interview status updated.' });
   } catch (err) { next(err); }
@@ -1063,9 +1164,24 @@ const getOffers = async (req, res, next) => {
 const createOffer = async (req, res, next) => {
   try {
     const { candidate, role, salary, joiningDate, status, sentDate, applicationId, letterContent } = req.body;
+    
+    let resolvedAppId = applicationId;
+    if (!resolvedAppId && candidate) {
+      const matchedApp = await prisma.jobApplication.findFirst({
+        where: {
+          OR: [
+            { candidate: { fullName: { contains: candidate } } },
+            { candidate: { user: { email: { contains: candidate } } } },
+          ]
+        },
+        orderBy: { submittedAt: 'desc' }
+      });
+      if (matchedApp) resolvedAppId = matchedApp.id;
+    }
+
     const offer = await prisma.offer.create({
       data: {
-        applicationId: applicationId || null,
+        applicationId: resolvedAppId || null,
         candidate,
         role,
         salary: salary || '',
@@ -1076,9 +1192,17 @@ const createOffer = async (req, res, next) => {
       }
     });
 
-    if (applicationId) {
+    if (resolvedAppId) {
       const { handleTransition, LifecycleEvents } = require('../services/workflowService');
-      await handleTransition(LifecycleEvents.OFFERED, { applicationId });
+      if (status === 'Accepted') {
+        await prisma.jobApplication.update({
+          where: { id: resolvedAppId },
+          data: { status: 'HIRED' }
+        }).catch(() => {});
+        await handleTransition(LifecycleEvents.OFFER_ACCEPTED, { applicationId: resolvedAppId }).catch(() => {});
+      } else {
+        await handleTransition(LifecycleEvents.OFFERED, { applicationId: resolvedAppId }).catch(() => {});
+      }
     }
 
     return res.status(201).json({ success: true, data: offer });
@@ -1088,7 +1212,8 @@ const createOffer = async (req, res, next) => {
 // PUT /api/hr/offers/:id
 const updateOffer = async (req, res, next) => {
   try {
-    const { candidate, role, salary, joiningDate, status, sentDate, letterContent } = req.body;
+    const { candidate, role, salary, joiningDate, status, sentDate, letterContent, applicationId } = req.body;
+    
     const offer = await prisma.offer.update({
       where: { id: req.params.id },
       data: {
@@ -1098,9 +1223,39 @@ const updateOffer = async (req, res, next) => {
         joiningDate,
         status,
         sentDate,
-        letterContent
+        letterContent,
+        ...(applicationId ? { applicationId } : {})
       }
     });
+
+    if (status === 'Accepted') {
+      let resolvedAppId = offer.applicationId || applicationId;
+      if (!resolvedAppId && offer.candidate) {
+        const matchedApp = await prisma.jobApplication.findFirst({
+          where: {
+            OR: [
+              { candidate: { fullName: { contains: offer.candidate } } },
+              { candidate: { user: { email: { contains: offer.candidate } } } },
+            ]
+          },
+          orderBy: { submittedAt: 'desc' }
+        });
+        if (matchedApp) resolvedAppId = matchedApp.id;
+      }
+
+      if (resolvedAppId) {
+        await prisma.jobApplication.update({
+          where: { id: resolvedAppId },
+          data: { status: 'HIRED' }
+        }).catch(() => {});
+
+        const { handleTransition, LifecycleEvents } = require('../services/workflowService');
+        await handleTransition(LifecycleEvents.OFFER_ACCEPTED, { applicationId: resolvedAppId }).catch((e) => {
+          console.error("Failed to trigger workflow on offer accept:", e);
+        });
+      }
+    }
+
     return res.status(200).json({ success: true, data: offer });
   } catch (err) { next(err); }
 };

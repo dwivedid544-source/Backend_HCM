@@ -75,14 +75,17 @@ function getImageKit() {
 function parseBase64DataUrl(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string') return null;
 
-  const match = dataUrl.match(/^data:([A-Za-z-+/.]+);base64,(.+)$/);
-  if (!match || match.length !== 3) return null;
+  const match = dataUrl.match(/^data:([a-zA-Z0-9_\-+./]+);base64,([\s\S]+)$/);
+  if (!match || match.length < 3) return null;
+
+  const mimeType = match[1];
+  const base64Clean = match[2].replace(/\s/g, '');
 
   return {
-    mimeType: match[1],
-    base64Data: match[2],
-    buffer: Buffer.from(match[2], 'base64'),
-    extension: getExtensionFromMime(match[1]),
+    mimeType,
+    base64Data: base64Clean,
+    buffer: Buffer.from(base64Clean, 'base64'),
+    extension: getExtensionFromMime(mimeType),
   };
 }
 

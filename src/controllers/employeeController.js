@@ -93,16 +93,31 @@ const updateProfile = async (req, res, next) => {
   try {
     const {
       fullName, phone, gender, bloodGroup, address, avatarUrl,
+      identityProofUrl, educationProofUrl,
       emergencyName, emergencyPhone, emergencyRelation, dob, bio,
       language, timezone, dateFormat, emailNotif, pushNotif, weeklySummary
     } = req.body;
 
-    // If avatarUrl is a base64 data URL, upload to cloud (Cloudinary)
     const profile = await prisma.employeeProfile.findUnique({ where: { userId: req.user.userId } });
+    
+    // Avatar -> Cloudinary
     const finalAvatarUrl = await handleBase64Field(
       avatarUrl,
       profile?.avatarUrl,
       { folder: 'hcm/avatars', filenamePrefix: 'avatar' }
+    );
+
+    // Identity & Education Proofs -> ImageKit
+    const finalIdentityProofUrl = await handleBase64Field(
+      identityProofUrl,
+      profile?.identityProofUrl,
+      { folder: 'hcm/proofs', filenamePrefix: 'id_proof' }
+    );
+
+    const finalEducationProofUrl = await handleBase64Field(
+      educationProofUrl,
+      profile?.educationProofUrl,
+      { folder: 'hcm/proofs', filenamePrefix: 'edu_proof' }
     );
 
     const updated = await prisma.employeeProfile.update({
@@ -114,6 +129,8 @@ const updateProfile = async (req, res, next) => {
         bloodGroup,
         address,
         avatarUrl: finalAvatarUrl,
+        identityProofUrl: finalIdentityProofUrl,
+        educationProofUrl: finalEducationProofUrl,
         emergencyName,
         emergencyPhone,
         emergencyRelation,
@@ -549,28 +566,11 @@ const createTicket = async (req, res, next) => {
 
     let attachmentUrl = null;
     if (parsed.data.attachmentBase64) {
-      const fs = require('fs');
-      const path = require('path');
-      const match = parsed.data.attachmentBase64.match(/^data:(.*?);base64,/);
-      let ext = '.png';
-      if (match && match[1]) {
-        const mimeTypes = {
-          'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
-          'application/pdf': '.pdf', 'application/msword': '.doc',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-          'application/vnd.ms-excel': '.xls',
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-          'text/csv': '.csv', 'text/plain': '.txt'
-        };
-        ext = mimeTypes[match[1]] || '.bin';
-      }
-      const base64Data = parsed.data.attachmentBase64.replace(/^data:.*;base64,/, "");
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-      const filename = `${Date.now()}_attachment${ext}`;
-      const uploadPath = path.join(__dirname, '../../public/uploads', filename);
-      fs.mkdirSync(path.dirname(uploadPath), { recursive: true });
-      fs.writeFileSync(uploadPath, fileBuffer);
-      attachmentUrl = `/uploads/${filename}`;
+      attachmentUrl = await handleBase64Field(
+        parsed.data.attachmentBase64,
+        null,
+        { folder: 'hcm/tickets', filenamePrefix: 'ticket' }
+      );
     }
 
     const ticket = await prisma.supportTicket.create({
@@ -605,28 +605,11 @@ const replyTicket = async (req, res, next) => {
 
     let attachmentUrl = null;
     if (attachmentBase64) {
-      const fs = require('fs');
-      const path = require('path');
-      const match = attachmentBase64.match(/^data:(.*?);base64,/);
-      let ext = '.png';
-      if (match && match[1]) {
-        const mimeTypes = {
-          'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
-          'application/pdf': '.pdf', 'application/msword': '.doc',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-          'application/vnd.ms-excel': '.xls',
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-          'text/csv': '.csv', 'text/plain': '.txt'
-        };
-        ext = mimeTypes[match[1]] || '.bin';
-      }
-      const base64Data = attachmentBase64.replace(/^data:.*;base64,/, "");
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-      const filename = `${Date.now()}_attachment${ext}`;
-      const uploadPath = path.join(__dirname, '../../public/uploads', filename);
-      fs.mkdirSync(path.dirname(uploadPath), { recursive: true });
-      fs.writeFileSync(uploadPath, fileBuffer);
-      attachmentUrl = `/uploads/${filename}`;
+      attachmentUrl = await handleBase64Field(
+        attachmentBase64,
+        null,
+        { folder: 'hcm/tickets', filenamePrefix: 'ticket_msg' }
+      );
     }
 
     const msg = await prisma.ticketMessage.create({
@@ -934,24 +917,17 @@ const getDocuments = async (req, res, next) => {
 
 const uploadDocument = async (req, res, next) => {
   try {
-    const { name, category, size, fileBase64 } = req.body;
+    const { name, category, size, fileBase64, content, file } = req.body;
     if (!name || !category) {
       return res.status(400).json({ success: false, error: { message: 'Name and Category are required' } });
     }
 
-    const baseUrl = process.env.BACKEND_URL || (req.protocol + '://' + req.get('host'));
-    let url = `${baseUrl}/uploads/placeholder.pdf`;
-    if (fileBase64) {
-      const fs = require('fs');
-      const path = require('path');
-      const base64Data = fileBase64.replace(/^data:.*;base64,/, "");
-      const fileBuffer = Buffer.from(base64Data, 'base64');
-      const filename = `${Date.now()}_${name}`;
-      const uploadPath = path.join(__dirname, '../../public/uploads', filename);
-      fs.mkdirSync(path.dirname(uploadPath), { recursive: true });
-      fs.writeFileSync(uploadPath, fileBuffer);
-      url = `${baseUrl}/uploads/${filename}`;
-    }
+    const payloadBase64 = fileBase64 || content || file;
+    const url = await handleBase64Field(
+      payloadBase64,
+      null,
+      { folder: 'hcm/documents', filenamePrefix: 'doc' }
+    );
 
     const doc = await prisma.document.create({
       data: {
@@ -959,7 +935,7 @@ const uploadDocument = async (req, res, next) => {
         name,
         category,
         size: size || '1.5 MB',
-        url,
+        url: url || `${process.env.BACKEND_URL || ''}/uploads/placeholder.pdf`,
         date: new Date().toISOString().split('T')[0]
       }
     });

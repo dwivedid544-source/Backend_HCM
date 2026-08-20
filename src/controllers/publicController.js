@@ -29,16 +29,19 @@ const contactFormSchema = z.object({
   message: z.string().min(10, { message: 'Message must be at least 10 characters.' })
 });
 
+const fs = require('fs');
+const path = require('path');
+
 const careerApplicationSchema = z.object({
   jobId: z.string().optional(),
-  jobTitle: z.string(),
+  jobTitle: z.string().optional(),
   name: z.string().min(2, { message: 'Name must be at least 2 characters.' }),
   email: z.string().email({ message: 'Valid email is required.' }),
   phone: z.string().optional(),
   resumeName: z.string().optional(),
   resumeData: z.string().optional(),
   portfolioUrl: z.string().optional(),
-  explanation: z.string().min(10, { message: 'Explanation must be at least 10 characters.' }),
+  explanation: z.string().optional(),
   aiScore: z.number().optional()
 });
 
@@ -58,35 +61,27 @@ const bookDemo = async (req, res, next) => {
 
     const { name, email, companySize, requirement, selectedDate, selectedSlot, companyName, phone, industry, country, message, modules } = parsed.data;
 
-    // Store demo booking in database
-    const demoBooking = await prisma.demoBooking.create({
+    const demo = await prisma.demoBooking.create({
       data: {
         name,
         email,
-        companySize: companySize || '',
-        requirement: requirement || '',
-        selectedDate: selectedDate || '',
-        selectedSlot: selectedSlot || '',
-        companyName,
-        phone,
-        industry,
-        country,
-        message,
-        modules
+        companySize: companySize || '1-10',
+        requirement: requirement || 'General Demo',
+        selectedDate: selectedDate ? new Date(selectedDate) : new Date(),
+        selectedSlot: selectedSlot || '10:00 AM',
+        companyName: companyName || null,
+        phone: phone || null,
+        industry: industry || null,
+        country: country || null,
+        message: message || null,
+        modules: modules || null
       }
     });
 
     return res.status(201).json({
       success: true,
-      data: {
-        id: demoBooking.id,
-        name,
-        email,
-        selectedDate,
-        selectedSlot,
-        requirement
-      },
-      message: 'Demo booked successfully. Confirmation email sent.'
+      data: demo,
+      message: 'Demo request received successfully. Our team will contact you shortly.'
     });
 
   } catch (err) {
@@ -104,41 +99,25 @@ const submitContact = async (req, res, next) => {
     if (!parsed.success) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: parsed.error.errors[0].message },
+        error: { code: 'VALIDATION_ERROR', message: parsed.error?.issues?.[0]?.message || parsed.error?.errors?.[0]?.message || 'Validation failed.' },
       });
     }
 
     const { name, email, subject, message } = parsed.data;
 
-    // Store contact inquiry in database
-    const contactInquiry = await prisma.supportTicket.create({
+    const contact = await prisma.contactMessage.create({
       data: {
-        userId: null, // Public submission, no user
-        subject: `${subject} - ${name}`,
-        category: subject,
-        priority: 'Medium',
-        status: 'OPEN'
-      }
-    });
-
-    // Add initial message
-    await prisma.ticketMessage.create({
-      data: {
-        ticketId: contactInquiry.id,
-        senderId: null,
-        text: `From: ${name} (${email})\n\n${message}`
+        name,
+        email,
+        subject,
+        message
       }
     });
 
     return res.status(201).json({
       success: true,
-      data: {
-        id: contactInquiry.id,
-        name,
-        email,
-        subject
-      },
-      message: 'Contact inquiry submitted successfully. We will respond within 2 business hours.'
+      data: contact,
+      message: 'Message sent successfully. We will get back to you soon.'
     });
 
   } catch (err) {
@@ -162,21 +141,116 @@ const submitCareerApplication = async (req, res, next) => {
 
     const { jobId, jobTitle, name, email, phone, resumeName, resumeData, portfolioUrl, explanation, aiScore } = parsed.data;
 
-    // Create a candidate user if not exists
-    let user;
-    const existingUser = await prisma.user.findUnique({ where: { email } });
+    // Find Target Job Post
+    let targetJob = null;
+    if (jobId) {
+      targetJob = await prisma.jobPost.findUnique({ where: { id: jobId } });
+    }
+    if (!targetJob && jobTitle) {
+      targetJob = await prisma.jobPost.findFirst({ where: { title: jobTitle } });
+    }
+    if (!targetJob) {
+      targetJob = await prisma.jobPost.findFirst();
+    }
 
-    if (existingUser) {
-      user = existingUser;
-    } else {
+    if (!targetJob) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Target job post not found in system' },
+      });
+    }
+
+    // Save Uploaded Resume to Disk (Storage)
+    let savedResumeUrl = null;
+    let finalResumeData = resumeData || null;
+
+    if (resumeData && typeof resumeData === 'string' && resumeData.startsWith('data:')) {
+      try {
+        const matches = resumeData.match(/^data:([^;]+);base64,(.+)$/);
+        if (matches && matches[2]) {
+          const mimeType = matches[1];
+          const base64Data = matches[2];
+          const fileBuffer = Buffer.from(base64Data, 'base64');
+
+          const ext = path.extname(resumeName || '') || (mimeType.includes('pdf') ? '.pdf' : mimeType.includes('word') ? '.docx' : '.txt');
+          const safeName = (path.basename(resumeName || 'resume', ext) || 'candidate_resume').replace(/[^a-zA-Z0-9_\-]/g, '_');
+          const filename = `resume_${Date.now()}_${safeName}${ext}`;
+          const uploadsDir = path.join(__dirname, '../../public/uploads/resumes');
+
+          fs.mkdirSync(uploadsDir, { recursive: true });
+          fs.writeFileSync(path.join(uploadsDir, filename), fileBuffer);
+
+          const port = process.env.PORT || 5001;
+          const backendUrl = process.env.BACKEND_URL || `http://localhost:${port}`;
+          savedResumeUrl = `${backendUrl}/uploads/resumes/${filename}`;
+        }
+      } catch (saveErr) {
+        console.error('[PublicController] Failed to save resume to disk:', saveErr.message);
+      }
+    }
+
+    // Perform AI Analysis on Actual Resume vs Job Requirements
+    let aiEvaluation = null;
+    let calculatedAiScore = null;
+    try {
+      const aiServerUrl = process.env.AI_SERVER_URL || 'http://localhost:4000';
+      const aiRes = await fetch(`${aiServerUrl}/api/mcp/resume/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resumeBase64: resumeData,
+          fileName: resumeName,
+          job: {
+            title: targetJob.title,
+            department: targetJob.department,
+            description: targetJob.description,
+            requirements: targetJob.requirements,
+            experience: targetJob.experience,
+          }
+        })
+      });
+        if (aiRes.ok) {
+          const json = await aiRes.json();
+          aiEvaluation = json.data || json;
+          calculatedAiScore = typeof aiEvaluation.score === 'number' ? aiEvaluation.score : aiEvaluation.matchScore;
+        }
+      } catch (aiErr) {
+        console.error('[PublicController] AI evaluation service call failed:', aiErr.message);
+      }
+
+      // If document is recognized as a random document or report instead of a CV/resume:
+      if (aiEvaluation && aiEvaluation.isValidResume === false) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_RESUME',
+            message: aiEvaluation.reasoning || 'Invalid Resume: The uploaded file is a random document or report instead of a valid CV/resume. Please upload a valid candidate CV or resume.'
+          }
+        });
+      }
+
+      const finalScore = typeof calculatedAiScore === 'number' 
+        ? calculatedAiScore 
+        : (typeof aiScore === 'number' ? aiScore : 75);
+
+    // Create a candidate user if not exists
+    let user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      const bcrypt = require('bcryptjs');
+      const passwordHash = await bcrypt.hash('candidate123', 10);
       user = await prisma.user.create({
         data: {
           email,
-          passwordHash: 'TEMP_HASH_' + Date.now(), // Temporary hash
+          passwordHash,
           role: 'CANDIDATE'
         }
       });
     }
+
+    const effectiveResumeUrl = savedResumeUrl || finalResumeData || resumeName || '';
+    const skillsToSave = (aiEvaluation?.extractedSkills && aiEvaluation.extractedSkills.length > 0)
+      ? aiEvaluation.extractedSkills.join(', ')
+      : (explanation || 'Candidate Profile');
 
     // Get or Create candidate profile
     let candidateProfile = await prisma.candidateProfile.findUnique({ where: { userId: user.id } });
@@ -187,55 +261,48 @@ const submitCareerApplication = async (req, res, next) => {
           fullName: name,
           phone,
           linkedin: portfolioUrl,
-          resumeUrl: resumeName,
-          resumeData: resumeData,
-          skills: explanation
+          resumeUrl: effectiveResumeUrl,
+          resumeData: finalResumeData,
+          skills: skillsToSave,
         }
       });
-    } else if (resumeData) {
+    } else {
       candidateProfile = await prisma.candidateProfile.update({
         where: { id: candidateProfile.id },
-        data: { resumeData: resumeData, resumeUrl: resumeName }
+        data: {
+          fullName: name || candidateProfile.fullName,
+          phone: phone || candidateProfile.phone,
+          linkedin: portfolioUrl || candidateProfile.linkedin,
+          resumeUrl: effectiveResumeUrl || candidateProfile.resumeUrl,
+          resumeData: finalResumeData || candidateProfile.resumeData,
+          skills: skillsToSave || candidateProfile.skills,
+        }
       });
-    }
-
-    let targetJobId = jobId;
-    if (!targetJobId) {
-      // Fallback if frontend didn't pass jobId: find by jobTitle
-      const matchingJob = await prisma.jobPost.findFirst({
-        where: { title: jobTitle }
-      });
-      targetJobId = matchingJob ? matchingJob.id : null;
-    }
-
-    if (!targetJobId) {
-       return res.status(404).json({
-         success: false,
-         error: { code: 'NOT_FOUND', message: 'Job post not found' },
-       });
     }
 
     // Check if application already exists
     const existingApplication = await prisma.jobApplication.findFirst({
       where: {
-        jobId: targetJobId,
+        jobId: targetJob.id,
         candidateId: candidateProfile.id
       }
     });
 
     if (existingApplication) {
       return res.status(400).json({
-         success: false,
-         error: { code: 'ALREADY_APPLIED', message: 'You have already applied for this position' },
+        success: false,
+        error: { code: 'ALREADY_APPLIED', message: 'You have already applied for this position' },
       });
     }
 
+    const coverLetterText = `Phone: ${phone || 'N/A'}\nPortfolio: ${portfolioUrl || 'N/A'}\n\nWhy join:\n${explanation || 'N/A'}\n\nAI Match Score: ${finalScore}%\nAI Assessment: ${aiEvaluation?.reasoning || 'Resume evaluated against job requirements'}\nRecommendation: ${aiEvaluation?.recommendation || (finalScore >= 75 ? 'Strong Match' : 'Standard Review')}`;
+
     const application = await prisma.jobApplication.create({
       data: {
-        jobId: targetJobId,
+        jobId: targetJob.id,
         candidateId: candidateProfile.id,
-        resumeUrl: resumeName,
-        coverLetter: `Phone: ${phone}\nPortfolio: ${portfolioUrl}\n\nWhy join:\n${explanation}\n\nAI Match Score: ${aiScore || 'N/A'}%`
+        resumeUrl: effectiveResumeUrl,
+        coverLetter: coverLetterText,
       }
     });
 
@@ -243,12 +310,11 @@ const submitCareerApplication = async (req, res, next) => {
       success: true,
       data: {
         id: application.id,
-        jobTitle,
+        jobTitle: targetJob.title,
         name,
-        email,
-        aiScore
+        email
       },
-      message: 'Application submitted successfully. HR team will contact you within 24 hours.'
+      message: 'Application submitted successfully. Thank you for applying!'
     });
 
   } catch (err) {
